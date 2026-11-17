@@ -235,7 +235,7 @@ EntityLink
 - **不建议抄数据**：Mappa Mundi、Blank Map、MapGen 模板、vanilla HOI4 文件通常没有清晰的开源许可，或者包含游戏衍生资产。
 - **首版不做 HOI4 导出**；因此不需要复制 HOI4 的 BMP/definition.csv/州文件结构。
 - **用户补裁 D-014（2026-11-17）覆盖“不建议抄数据”的工程建议**：必须实际导入可自行下载的 HOI4 社区地图，而不是只做合成世界。落实边界：
-  - 首个导入源为 `N0zza/MappaMundi` 固定提交 `7a7afbf0`；raw 资产放 gitignored `runtime/imports/**`，不提交；
+  - 当前导入源为 `AzurCrystal/Magna-Europa` 固定提交 `d7a5775`（欧洲、HOI4 1.19）；Mappa Mundi 仅保留为历史对照；raw 资产放 gitignored `runtime/imports/**`，不提交；
   - 导入器可以用 heightmap 做有 warning/stats 的海陆修复，也可容错解析畸形 state 文本；不得伪造州/区域归属；
   - strategic region / supply hub / railway 必须先读源文件；源文件缺失时不得默认自动生成，需记录、换源或等用户授权；
   - 导入的是内部原生 polygon 状态，不恢复 HOI4 mod 导出；

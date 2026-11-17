@@ -1,6 +1,6 @@
 # WorldSimulator 文档入口
 
-> **当前阶段**：Mappa Mundi 社区地图全量导入完成（2026-11-17；21100 省；67 tests；heightmap 海陆修复；静态 polygon 时间线可回放）
+> **当前阶段**：Magna Europa Reforged 社区地图全量导入完成（2026-11-17；21670 省；253 regions；674 supply；1921 railways；68 tests）
 > **当前状态入口**：[`agents/STATUS.md`](agents/STATUS.md)  
 > **用户设计原稿**：[`superpowers/specs/2026-11-17-worldsim-architecture-design-source.md`](superpowers/specs/2026-11-17-worldsim-architecture-design-source.md)  
 > **文档系统规则**：[`AGENTS.md`](AGENTS.md)
@@ -17,7 +17,8 @@
 | Headless Core 硬化计划 | [`superpowers/plans/2026-11-17-headless-core-hardening.md`](superpowers/plans/2026-11-17-headless-core-hardening.md) |
 | 规模/schema/多进程证据 | [`superpowers/reports/2026-11-17-headless-core-hardening-report.md`](superpowers/reports/2026-11-17-headless-core-hardening-report.md) |
 | 社区地图导入计划 | [`superpowers/plans/2026-11-17-community-map-import.md`](superpowers/plans/2026-11-17-community-map-import.md) |
-| Mappa Mundi 全量导入证据 | [`superpowers/reports/2026-11-17-mappa-mundi-import-report.md`](superpowers/reports/2026-11-17-mappa-mundi-import-report.md) |
+| Magna Europa 全量导入证据 | [`superpowers/reports/2026-11-17-magna-europa-import-report.md`](superpowers/reports/2026-11-17-magna-europa-import-report.md) |
+| Mappa Mundi 历史证据 | [`superpowers/reports/2026-11-17-mappa-mundi-import-report.md`](superpowers/reports/2026-11-17-mappa-mundi-import-report.md) |
 | 渲染方案比较 | [`superpowers/reports/2026-11-17-renderer-options.md`](superpowers/reports/2026-11-17-renderer-options.md) |
 | 邻仓/DSH ORBAT 侦察证据 | [`superpowers/reports/2026-11-17-neighbor-projects-recon.md`](superpowers/reports/2026-11-17-neighbor-projects-recon.md) |
 | 设计裁定索引 | [`superpowers/DESIGN_RULINGS.md`](superpowers/DESIGN_RULINGS.md) |

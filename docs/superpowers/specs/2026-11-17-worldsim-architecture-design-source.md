@@ -146,3 +146,19 @@
   2. 源文件缺失时不自动编造，记录 warning / 换数据源 / 等用户裁定；
   3. 如果用户明确要求生成，生成结果必须标 `generated=true` 和生成规则，且不能伪装成源地图事实。
 - 这不改变“不导出 HOI4 mod”的裁定。
+
+## 10. 可靠社区地图源补裁（逐字，2026-11-17）
+
+> 你不能找个靠谱的源吗
+
+解释与执行：
+
+- 已审计多个源：Mappa Mundi 全球但 strategic region/supply/railway 是占位；原版 HOI4 全球完整但属于商业游戏数据；Full World Map Mod 等旧源缺后勤数据。
+- 用户选择 **Magna Europa Reforged** 作为当前社区地图源：
+  - repo `https://github.com/AzurCrystal/Magna-Europa.git`
+  - commit `d7a57759c188a034c49a0e96aceb1702fa76fc74`
+  - HOI4 1.19.* / mod 0.99.6
+  - 范围：欧洲
+- 使用理由：源内实际包含 253 strategic regions、674 有效 supply nodes、1921 railways、2986 states、21670 used provinces；不是靠自动生成补齐。
+- Mappa Mundi 保留为历史导入证据；不再作为当前交付源。
+- raw 数据只放 gitignored `runtime/imports/MagnaEuropa`；上游无标准 LICENSE，公开分发前必须解决许可。

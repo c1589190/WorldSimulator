@@ -16,8 +16,8 @@ Agent 导向的世界模拟器/编辑器。当前实现的是 **headless core**�
 - SQLite schema `user_version` 门禁与 v0→v1 最小迁移；
 - 合成 300/500 省 benchmark；两个真实 JVM 的写竞争测试；
 - 静态地图实体 resolver：`map/province|state|region|supplyHub`；
-- **Mappa Mundi 社区地图导入器**：BMP 省色块 → 原生 polygon/ring/hole/multi-part，州/区域/补给中心/邻接；
-- 海陆类型用 `heightmap.bmp` 修复（definition 全 `land` 的源数据）；容错解析截断/畸形 state 文件；
+- **Magna Europa Reforged 社区地图导入器**：BMP 省色块 → 原生 polygon/ring/hole/multi-part，state/strategic region/supply hub/railway/special adjacency；
+- 源数据优先：不自动生成缺失的 region/hub/railway；海陆冲突、畸形 state 等修复会写 warning/stats；
 - 最小 CLI 与 JUnit 测试。
 
 尚未实现：ORBAT、INFO、DM/决策人权限、MCP 工具面、WebUI。人类客户端定位为只读查看器。
@@ -31,7 +31,7 @@ mvn clean test
 mvn -DskipTests package
 ```
 
-`mvn test` 当前为 67 个测试。
+`mvn test` 当前为 68 个测试。
 
 ## CLI
 
@@ -41,19 +41,21 @@ mvn -DskipTests package
 # 只下载导入所需文件；raw 资产落在 runtime/imports/**，不进 Git
 tools/fetch-community-map.sh
 
-# Mappa Mundi 全量导入（20k 省；建议显式给 heap）
+# Magna Europa Reforged 全量导入（欧洲；建议显式给 heap）
 java -Xmx6g -jar target/worldsim-0.1.0-SNAPSHOT.jar import-hoi4 \
-  --source runtime/imports/MappaMundi \
-  --db runtime/worlds/mappa-mundi.db --reset
+  --source runtime/imports/MagnaEuropa \
+  --db runtime/worlds/magna-europa.db --reset
 
 # 回放/地址查询
 java -Xmx6g -jar target/worldsim-0.1.0-SNAPSHOT.jar verify \
-  --db runtime/worlds/mappa-mundi.db
+  --db runtime/worlds/magna-europa.db
 java -Xmx6g -jar target/worldsim-0.1.0-SNAPSHOT.jar resolve \
-  --db runtime/worlds/mappa-mundi.db --address main-0/map/province/3838
+  --db runtime/worlds/magna-europa.db --address main-0/map/province/1
+java -Xmx6g -jar target/worldsim-0.1.0-SNAPSHOT.jar resolve \
+  --db runtime/worlds/magna-europa.db --address main-0/map/supplyHub/supply-249
 ```
 
-全量 Mappa Mundi 实测：`21100` used provinces、`20707` states、`1` region、`58728` adjacencies、`25965` rings、`374` heightmap 推断 sea、`171` repaired polygons、`0` valid supply hubs。详见导入报告。
+全量 Magna Europa 实测：`21670` used provinces、`2986` states、`253` regions、`65196` adjacencies、`674` supply hubs、`1921` railways、`8` repaired polygons、`3` heightmap 推断 sea。详见导入报告。
 
 ### 核心 demo / benchmark
 
@@ -109,7 +111,7 @@ src/main/java/io/mosire/worldsim/state/     static state + WorldChangeSet
 src/main/java/io/mosire/worldsim/timeline/  SQLite store + TimelineService + working copy
 src/main/java/io/mosire/worldsim/importer/  HOI4 community-map BMP/state/region importer
 src/main/java/io/mosire/worldsim/cli/       sample/synthetic world + headless CLI
-tools/fetch-community-map.sh                sparse download of Mappa Mundi source files
+tools/fetch-community-map.sh                sparse download of Magna Europa source files
 src/test/java/                               JUnit 5 tests
 ```
 
@@ -122,10 +124,11 @@ src/test/java/                               JUnit 5 tests
 - 实现计划：[`docs/superpowers/plans/2026-11-17-headless-core.md`](docs/superpowers/plans/2026-11-17-headless-core.md)
 - 硬化证据：[`docs/superpowers/reports/2026-11-17-headless-core-hardening-report.md`](docs/superpowers/reports/2026-11-17-headless-core-hardening-report.md)
 - 社区地图导入计划：[`docs/superpowers/plans/2026-11-17-community-map-import.md`](docs/superpowers/plans/2026-11-17-community-map-import.md)
-- 社区地图导入证据：[`docs/superpowers/reports/2026-11-17-mappa-mundi-import-report.md`](docs/superpowers/reports/2026-11-17-mappa-mundi-import-report.md)
+- 社区地图导入证据：[`docs/superpowers/reports/2026-11-17-magna-europa-import-report.md`](docs/superpowers/reports/2026-11-17-magna-europa-import-report.md)
+- Mappa Mundi 历史导入证据：[`docs/superpowers/reports/2026-11-17-mappa-mundi-import-report.md`](docs/superpowers/reports/2026-11-17-mappa-mundi-import-report.md)
 
 ## License
 
 本仓代码 MIT，见 [`LICENSE`](LICENSE)。
 
-Mappa Mundi 社区地图 raw 资产不在本仓；脚本下载到 gitignored `runtime/imports/**`。该上游仓库当前没有标准 LICENSE，只做本地验证；公开分发导入结果前必须重新确认地图/州数据许可。
+Magna Europa Reforged raw 资产不在本仓；脚本下载到 gitignored `runtime/imports/**`。该上游仓库当前没有标准 LICENSE，只做本地验证；公开分发导入结果前必须重新确认地图/州数据许可。
