@@ -83,11 +83,11 @@ WorldSimulator 是一个 **Agent 导向的世界模拟器/编辑器**。它的�
 
 ## 4. 当前工程边界（草稿，待实现确认）
 
-建议模块名（最终以专题设计为准）：
+建议模块名（当前实现仍为单模块 Maven 工程，后续可按边界拆分）：
 
 ```text
 worldsim-core        # 时间线、Command/ChangeSet、节点地址、存储、回放
-worldsim-map         # 省份栅格/拓扑、州/区域、补给中心、铁路、地图工具
+worldsim-map         # 原生 polygon 省、州/区域、补给中心、铁路、地图工具
 worldsim-orbat       # ORBAT 文档/编制树/实例/部署/导出
 worldsim-info        # 决策人 INFO 覆盖层、受众可见性
 worldsim-docs        # 或直接依赖 DocsMosire；自然语言文档

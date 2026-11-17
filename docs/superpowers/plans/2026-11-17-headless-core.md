@@ -1,6 +1,6 @@
 # Headless Core 实现计划
 
-> **状态**：进行中（2026-11-17）
+> **状态**：已完成（2026-11-17；实现与验证见 STATUS）
 > **日期**：2026-11-17
 > **本文性质**：实现计划（派单责任区）；不是设计正本。
 > **用户原话（逐字，2026-11-17）**：
@@ -37,6 +37,13 @@
 2. CLI `demo` 能在临时 SQLite 中完成 genesis/apply/discard/save/advance/fork/replay；
 3. `python3 tools/check-docs.py` 全绿；
 4. `STATUS.md` 写明实际命令、rc、测试数与剩余风险。
+
+## 完成结果
+
+- SQLite store与 TimelineService 已落盘；
+- JUnit 47 tests 全绿；
+- CLI demo/replay/verify/tree 已运行；
+- 文档检查 `PASS`。
 
 ## 未验证边界
 

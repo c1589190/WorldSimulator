@@ -1,6 +1,6 @@
 # WorldSimulator 文档入口
 
-> **当前阶段**：用户裁定 + Headless Core WIP（2026-11-17）  
+> **当前阶段**：Headless Core 已实现（2026-11-17；47 tests；CLI/回放可运行）
 > **当前状态入口**：[`agents/STATUS.md`](agents/STATUS.md)  
 > **用户设计原稿**：[`superpowers/specs/2026-11-17-worldsim-architecture-design-source.md`](superpowers/specs/2026-11-17-worldsim-architecture-design-source.md)  
 > **文档系统规则**：[`AGENTS.md`](AGENTS.md)
@@ -10,8 +10,10 @@
 | 需要 | 入口 |
 |---|---|
 | 当前状态、WIP、未验证项、下一步 | [`agents/STATUS.md`](agents/STATUS.md) |
+| 根目录构建/CLI 快速入口 | [`../README.md`](../README.md) |
 | 用户裁定逐字原话 | [`superpowers/specs/2026-11-17-worldsim-architecture-design-source.md`](superpowers/specs/2026-11-17-worldsim-architecture-design-source.md) |
 | 地图 + ORBAT + INFO + 时间线 + MCP 专题设计 | [`superpowers/specs/2026-11-17-map-orbat-info-timeline-design.md`](superpowers/specs/2026-11-17-map-orbat-info-timeline-design.md) |
+| Headless Core 实现计划/完成边界 | [`superpowers/plans/2026-11-17-headless-core.md`](superpowers/plans/2026-11-17-headless-core.md) |
 | 渲染方案比较 | [`superpowers/reports/2026-11-17-renderer-options.md`](superpowers/reports/2026-11-17-renderer-options.md) |
 | 邻仓/DSH ORBAT 侦察证据 | [`superpowers/reports/2026-11-17-neighbor-projects-recon.md`](superpowers/reports/2026-11-17-neighbor-projects-recon.md) |
 | 设计裁定索引 | [`superpowers/DESIGN_RULINGS.md`](superpowers/DESIGN_RULINGS.md) |
