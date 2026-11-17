@@ -55,7 +55,41 @@ class Hoi4CommunityMapImporterTest {
     assertEquals(1, result.stats().regions());
     assertEquals(1, result.stats().adjacencies());
     assertEquals(1, result.stats().supplyHubs());
+    assertEquals(0, result.stats().inferredSeaProvinces());
     assertTrue(result.warnings().isEmpty(), () -> result.warnings().toString());
+  }
+
+  @Test
+  void salvagesProvincesOutsideMalformedStateBlock(@TempDir Path tempDir) throws IOException {
+    Path source = Hoi4FixtureFiles.writeWithProvincesOutsideStateBlock(
+        tempDir.resolve("malformed-state-map"));
+
+    var result = new Hoi4CommunityMapImporter().importWorld(source);
+
+    assertEquals(2, result.state().map().provinces().size());
+    assertEquals("2", result.state().map().provinces().get("2").stateId());
+    assertTrue(WorldMapValidator.validate(result.state().map()).isEmpty());
+  }
+
+  @Test
+  void infersSeaFromHeightmapAndDropsOceanState(@TempDir Path tempDir) throws IOException {
+    Path source = Hoi4FixtureFiles.writeWithWaterProvince(tempDir.resolve("water-map"));
+
+    var result = new Hoi4CommunityMapImporter().importWorld(source);
+    var map = result.state().map();
+
+    assertEquals(2, map.provinces().size());
+    assertEquals("land", map.provinces().get("1").kind());
+    assertEquals("1", map.provinces().get("1").stateId());
+    assertEquals("sea", map.provinces().get("2").kind());
+    assertEquals(null, map.provinces().get("2").stateId());
+    assertEquals(1, map.states().size());
+    assertEquals(1, map.supplyHubs().size());
+    assertEquals("sea", map.adjacencies().get(0).kind());
+    assertEquals(1, result.stats().inferredSeaProvinces());
+    assertTrue(WorldMapValidator.validate(map).isEmpty());
+    assertTrue(result.warnings().stream()
+        .anyMatch(warning -> warning.contains("heightmap 推断 1")));
   }
 
 }

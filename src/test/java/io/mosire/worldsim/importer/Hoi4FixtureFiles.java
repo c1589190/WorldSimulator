@@ -18,6 +18,7 @@ public final class Hoi4FixtureFiles {
     Path locDir = Files.createDirectories(root.resolve("localisation"));
 
     writeBmp(mapDir.resolve("provinces.bmp"));
+    writeHeightmapBmp(mapDir.resolve("heightmap.bmp"), false);
     Files.writeString(mapDir.resolve("definition.csv"),
         "1;255;0;0;land;false;plains;1\n"
             + "2;0;255;0;land;false;forest;1\n",
@@ -56,6 +57,29 @@ public final class Hoi4FixtureFiles {
     return root;
   }
 
+  /** 模拟 Mappa 的畸形 state：provinces 写在 state 提前闭合括号之外。 */
+  public static Path writeWithProvincesOutsideStateBlock(Path root) throws IOException {
+    write(root);
+    Files.writeString(root.resolve("history/states/2-Beta.txt"), """
+        state = {
+          id = 2
+          name = "STATE_2"
+          history = {
+            owner = FRA
+          }
+        }
+        provinces { 2 }
+        """, StandardCharsets.UTF_8);
+    return root;
+  }
+
+  /** 与 write 相同的州/区域，但右半省在 heightmap 中为水面。 */
+  public static Path writeWithWaterProvince(Path root) throws IOException {
+    write(root);
+    writeHeightmapBmp(root.resolve("map/heightmap.bmp"), true);
+    return root;
+  }
+
   private static void writeBmp(Path path) throws IOException {
     int width = 4;
     int height = 2;
@@ -88,6 +112,38 @@ public final class Hoi4FixtureFiles {
           bytes.put(offset + 1, (byte) 255);
           bytes.put(offset + 2, (byte) 0);
         }
+      }
+    }
+    Files.write(path, bytes.array());
+  }
+
+  private static void writeHeightmapBmp(Path path, boolean waterRight) throws IOException {
+    int width = 4;
+    int height = 2;
+    int rowStride = (width + 3) / 4 * 4;
+    int imageSize = rowStride * height;
+    int pixelOffset = 54 + 256 * 4;
+    ByteBuffer bytes = ByteBuffer.allocate(pixelOffset + imageSize).order(ByteOrder.LITTLE_ENDIAN);
+    bytes.put((byte) 'B').put((byte) 'M');
+    bytes.putInt(pixelOffset + imageSize);
+    bytes.putShort((short) 0).putShort((short) 0);
+    bytes.putInt(pixelOffset);
+    bytes.putInt(40);
+    bytes.putInt(width);
+    bytes.putInt(height);
+    bytes.putShort((short) 1);
+    bytes.putShort((short) 8);
+    bytes.putInt(0);
+    bytes.putInt(imageSize);
+    bytes.putInt(0).putInt(0).putInt(0).putInt(0);
+    for (int i = 0; i < 256; i++) {
+      bytes.put((byte) i).put((byte) i).put((byte) i).put((byte) 0);
+    }
+    for (int sourceRow = 0; sourceRow < height; sourceRow++) {
+      int rowStart = pixelOffset + sourceRow * rowStride;
+      for (int x = 0; x < width; x++) {
+        int value = waterRight && x >= 2 ? 95 : 100;
+        bytes.put(rowStart + x, (byte) value);
       }
     }
     Files.write(path, bytes.array());

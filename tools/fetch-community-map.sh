@@ -5,8 +5,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="${1:-$ROOT/runtime/imports/MappaMundi}"
-REPO="${MAPPAMUNDI_REPO:-https://github.com/hoi4fan1234554321/MappaMundi.git}"
-COMMIT="${MAPPAMUNDI_COMMIT:-c19441897a6dd6c86ce57edc37b6a3e01b3dc48d}"
+REPO="${MAPPAMUNDI_REPO:-https://github.com/N0zza/MappaMundi.git}"
+COMMIT="${MAPPAMUNDI_COMMIT:-7a7afbf04ef64b715ff1ebf95380f73a7d02b21a}"
 
 mkdir -p "$(dirname "$DEST")"
 if [[ -d "$DEST/.git" ]]; then
@@ -26,6 +26,7 @@ git -C "$DEST" sparse-checkout set \
   mappamundi.mod \
   map/provinces.bmp \
   map/definition.csv \
+  map/heightmap.bmp \
   map/supply_nodes.txt \
   map/strategicregions \
   history/states \

@@ -41,18 +41,20 @@ public final class Hoi4CommunityMapImporter {
   private static final Pattern ID_FIELD = Pattern.compile("(?m)^\\s*id\\s*=\\s*(\\d+)");
   private static final Pattern NAME_FIELD = Pattern.compile("(?m)^\\s*name\\s*=\\s*\"([^\"]*)\"");
   private static final Pattern PROVINCES_FIELD =
-      Pattern.compile("(?s)\\bprovinces\\s*=\\s*\\{(.*?)}");
+      Pattern.compile("(?s)\\bprovinces\\s*=*\\s*\\{(.*?)}");
   private static final Pattern INT_TOKEN = Pattern.compile("\\d+");
   private static final Pattern LOCALISATION =
       Pattern.compile("^\\s*([A-Za-z0-9_.-]+):\\d*\\s+\"(.*)\"\\s*$");
   private static final String UNASSIGNED_STATE = "unassigned-state";
   private static final String UNASSIGNED_REGION = "unassigned-region";
+  private static final int WATER_HEIGHT_MAX = 95;
 
   public ImportResult importWorld(Path sourceDirectory) {
     Path root = Objects.requireNonNull(sourceDirectory, "sourceDirectory")
         .toAbsolutePath().normalize();
     Path provinceBitmap = root.resolve("map/provinces.bmp");
     Path definitionFile = root.resolve("map/definition.csv");
+    Path heightmapFile = root.resolve("map/heightmap.bmp");
     Path statesDirectory = root.resolve("history/states");
     Path regionsDirectory = root.resolve("map/strategicregions");
     requireFile(provinceBitmap);
@@ -98,16 +100,18 @@ public final class Hoi4CommunityMapImporter {
 
     RasterProvincePolygonizer.Result polygons =
         RasterProvincePolygonizer.polygonize(raster.width(), raster.height(), provinceIds, usedProvinceIds);
+    ProvinceKinds kinds = inferProvinceKinds(heightmapFile, definitions.byId(), pixelCounts,
+        raster.width(), raster.height(), provinceIds, usedProvinceIds, warnings);
 
     Map<String, String> localisation = parseLocalisation(root.resolve("localisation"));
-    ParsedMapData stateData = parseStates(statesDirectory, usedProvinceIds, definitions.byId(), warnings);
+    ParsedMapData stateData = parseStates(statesDirectory, usedProvinceIds, kinds.kinds(), warnings);
     ParsedRegionData regionData = parseRegions(regionsDirectory, usedProvinceIds, warnings);
-    assignFallbacks(usedProvinceIds, definitions.byId(), stateData, regionData, warnings);
+    assignFallbacks(usedProvinceIds, kinds.kinds(), stateData, regionData, warnings);
     Map<Integer, String> provinceNames = provinceNames(usedProvinceIds, localisation);
-    Map<String, State> states = buildStates(usedProvinceIds, definitions.byId(), stateData, localisation);
+    Map<String, State> states = buildStates(usedProvinceIds, kinds.kinds(), stateData, localisation);
     Map<String, StrategicRegion> regions = buildRegions(regionData, localisation);
     Map<String, SupplyHub> supplyHubs = parseSupplyHubs(root.resolve("map/supply_nodes.txt"),
-        usedProvinceIds, definitions.byId(), warnings);
+        usedProvinceIds, kinds.kinds(), warnings);
 
     WorldMap.Builder map = WorldMap.builder("mappa-mundi", "Mappa Mundi", raster.width(), raster.height());
     for (int id : usedProvinceIds) {
@@ -116,8 +120,9 @@ public final class Hoi4CommunityMapImporter {
         throw new Hoi4ImportException("HOI4_DEFINITION_MISSING", "使用中的省 id 无 definition: " + id);
       }
       String provinceId = Integer.toString(id);
+      String kind = kinds.kinds()[id];
       Integer assignedState = stateData.provinceState().get(id);
-      String stateId = definition.type().equals("sea")
+      String stateId = kind.equals("sea")
           ? null
           : (assignedState == null ? UNASSIGNED_STATE : Integer.toString(assignedState));
       String regionId = regionData.provinceRegion().get(id);
@@ -127,7 +132,7 @@ public final class Hoi4CommunityMapImporter {
       map.province(new Province(
           provinceId,
           provinceNames.getOrDefault(id, "Province " + id),
-          definition.type(),
+          kind,
           definition.terrain(),
           polygons.shapes().get(id),
           polygons.displayPoints().get(id),
@@ -143,13 +148,11 @@ public final class Hoi4CommunityMapImporter {
     for (Map.Entry<Long, Integer> entry : polygons.borderLengths().entrySet()) {
       int a = RasterProvincePolygonizer.borderA(entry.getKey());
       int b = RasterProvincePolygonizer.borderB(entry.getKey());
-      Definition left = definitions.byId()[a];
-      Definition right = definitions.byId()[b];
-      if (left == null || right == null) {
+      if (definitions.byId()[a] == null || definitions.byId()[b] == null) {
         continue;
       }
       adjacencies.add(new Adjacency(Integer.toString(a), Integer.toString(b),
-          adjacencyKind(left.type(), right.type()), entry.getValue().doubleValue()));
+          adjacencyKind(kinds.kinds()[a], kinds.kinds()[b]), entry.getValue().doubleValue()));
     }
     adjacencies.forEach(map::adjacency);
     WorldMap worldMap = map.build();
@@ -170,18 +173,17 @@ public final class Hoi4CommunityMapImporter {
         supplyHubs.size(),
         polygons.ringsTraced(),
         polygons.repaired(),
+        kinds.inferredSeaProvinces(),
         warnings.size());
     return new ImportResult(state, stats, List.copyOf(warnings));
   }
 
-  private static void assignFallbacks(Set<Integer> usedProvinceIds, Definition[] definitions,
+  private static void assignFallbacks(Set<Integer> usedProvinceIds, String[] kinds,
       ParsedMapData stateData, ParsedRegionData regionData, List<String> warnings) {
     int missingStates = 0;
     int missingRegions = 0;
     for (int id : usedProvinceIds) {
-      Definition definition = definitions[id];
-      if (definition != null && !definition.type().equals("sea")
-          && !stateData.provinceState().containsKey(id)) {
+      if (!kinds[id].equals("sea") && !stateData.provinceState().containsKey(id)) {
         missingStates++;
       }
       if (!regionData.provinceRegion().containsKey(id)) {
@@ -199,7 +201,7 @@ public final class Hoi4CommunityMapImporter {
     }
   }
 
-  private static Map<String, State> buildStates(Set<Integer> usedProvinceIds, Definition[] definitions,
+  private static Map<String, State> buildStates(Set<Integer> usedProvinceIds, String[] kinds,
       ParsedMapData data, Map<String, String> localisation) {
     Map<String, List<String>> provinceIdsByState = new LinkedHashMap<>();
     List<String> unassigned = new ArrayList<>();
@@ -210,9 +212,7 @@ public final class Hoi4CommunityMapImporter {
       }
     }
     for (int id : usedProvinceIds) {
-      Definition definition = definitions[id];
-      if (definition != null && !definition.type().equals("sea")
-          && !data.provinceState().containsKey(id)) {
+      if (!kinds[id].equals("sea") && !data.provinceState().containsKey(id)) {
         unassigned.add(Integer.toString(id));
       }
     }
@@ -267,7 +267,7 @@ public final class Hoi4CommunityMapImporter {
   }
 
   private static Map<String, SupplyHub> parseSupplyHubs(Path file, Set<Integer> used,
-      Definition[] definitions, List<String> warnings) {
+      String[] kinds, List<String> warnings) {
     if (!Files.isRegularFile(file)) {
       warnings.add("缺少 map/supply_nodes.txt，导入零个 supply hub");
       return Map.of();
@@ -287,9 +287,8 @@ public final class Hoi4CommunityMapImporter {
         warnings.add("supply_nodes 非 1 标记，跳过 pair: " + marker + " " + provinceId);
         continue;
       }
-      if (!used.contains(provinceId) || provinceId >= definitions.length
-          || definitions[provinceId] == null
-          || !definitions[provinceId].type().equals("land")) {
+      if (!used.contains(provinceId) || provinceId >= kinds.length
+          || !kinds[provinceId].equals("land")) {
         warnings.add("supply node 引用无效 land province: " + provinceId);
         continue;
       }
@@ -362,7 +361,54 @@ public final class Hoi4CommunityMapImporter {
     return new DefinitionTable(byId, colorToId);
   }
 
-  private static ParsedMapData parseStates(Path directory, Set<Integer> used, Definition[] definitions,
+  private static ProvinceKinds inferProvinceKinds(Path heightmapFile, Definition[] definitions,
+      int[] pixelCounts, int width, int height, int[] provinceIds, Set<Integer> used,
+      List<String> warnings) {
+    String[] kinds = new String[definitions.length];
+    for (int id : used) {
+      Definition definition = definitions[id];
+      if (definition == null) {
+        throw new Hoi4ImportException("HOI4_DEFINITION_MISSING", "使用中的省 id 无 definition: " + id);
+      }
+      kinds[id] = definition.type();
+    }
+    if (!Files.isRegularFile(heightmapFile)) {
+      warnings.add("缺少 map/heightmap.bmp，跳过海陆类型修复");
+      return new ProvinceKinds(kinds, 0);
+    }
+    Bmp8Reader.Raster heightmap;
+    try {
+      heightmap = Bmp8Reader.read(heightmapFile);
+    } catch (IOException e) {
+      throw new Hoi4ImportException("HOI4_HEIGHTMAP_READ_FAILED",
+          "读取 heightmap.bmp 失败: " + heightmapFile, e);
+    }
+    if (heightmap.width() != width || heightmap.height() != height) {
+      throw new Hoi4ImportException("HOI4_HEIGHTMAP_SIZE_MISMATCH",
+          "heightmap 尺寸与 provinces.bmp 不一致: " + heightmap.width() + "x" + heightmap.height()
+              + " vs " + width + "x" + height);
+    }
+    int[] waterPixels = new int[definitions.length];
+    for (int i = 0; i < heightmap.values().length; i++) {
+      if (heightmap.values()[i] <= WATER_HEIGHT_MAX) {
+        waterPixels[provinceIds[i]]++;
+      }
+    }
+    int inferred = 0;
+    for (int id : used) {
+      if (kinds[id].equals("land") && pixelCounts[id] > 0
+          && waterPixels[id] * 2 >= pixelCounts[id]) {
+        kinds[id] = "sea";
+        inferred++;
+      }
+    }
+    if (inferred > 0) {
+      warnings.add("heightmap 推断 " + inferred + " 个 definition=land 省为 sea");
+    }
+    return new ProvinceKinds(kinds, inferred);
+  }
+
+  private static ParsedMapData parseStates(Path directory, Set<Integer> used, String[] kinds,
       List<String> warnings) {
     Map<Integer, Integer> provinceState = new HashMap<>();
     Map<Integer, String> stateNameKeys = new HashMap<>();
@@ -372,8 +418,12 @@ public final class Hoi4CommunityMapImporter {
         String text = readText(path, "state");
         List<String> blocks = extractBlocks(text, "state");
         if (blocks.isEmpty()) {
-          warnings.add("state 文件无 state block: " + path.getFileName());
-          continue;
+          blocks = List.of(text);
+        } else if (blocks.size() == 1
+            && intsInProvinces(blocks.get(0)).isEmpty()
+            && !intsInProvinces(text).isEmpty()) {
+          // 少数社区文件把 provinces 写到了 state 的提前闭合括号之外。
+          blocks = List.of(text);
         }
         for (String block : blocks) {
           Integer stateId = firstInt(ID_FIELD, block);
@@ -386,12 +436,10 @@ public final class Hoi4CommunityMapImporter {
             stateNameKeys.putIfAbsent(stateId, nameKey);
           }
           for (int provinceId : intsInProvinces(block)) {
-            if (!used.contains(provinceId) || provinceId >= definitions.length
-                || definitions[provinceId] == null) {
+            if (!used.contains(provinceId) || provinceId >= kinds.length) {
               continue;
             }
-            if (definitions[provinceId].type().equals("sea")) {
-              warnings.add("state " + stateId + " 含海省 " + provinceId + "，已忽略");
+            if (kinds[provinceId].equals("sea")) {
               continue;
             }
             Integer previous = provinceState.putIfAbsent(provinceId, stateId);
@@ -540,7 +588,8 @@ public final class Hoi4CommunityMapImporter {
         }
       }
       if (end < 0) {
-        // Mappa Mundi 有少量截断/空 state 文件；跳过该 block，由调用方把缺失省归入 unassigned。
+        // Mappa Mundi 有少量截断 state 文件；保留已写出的字段/省列表，避免整州丢失。
+        blocks.add(text.substring(brace + 1));
         break;
       }
       blocks.add(text.substring(brace + 1, end));
@@ -660,7 +709,10 @@ public final class Hoi4CommunityMapImporter {
       int supplyHubs,
       int rings,
       int repairedPolygons,
+      int inferredSeaProvinces,
       int warnings) {}
+
+  private record ProvinceKinds(String[] kinds, int inferredSeaProvinces) {}
 
   private record Definition(int id, int rgb, String type, String terrain) {}
 
