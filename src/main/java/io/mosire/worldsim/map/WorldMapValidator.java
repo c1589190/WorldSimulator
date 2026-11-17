@@ -117,6 +117,40 @@ public final class WorldMapValidator {
       }
     }
 
+    // 铁路：链中省存在、不是海省、每一对相邻。
+    Set<String> adjacencyPairs = new HashSet<>();
+    for (Adjacency adjacency : map.adjacencies()) {
+      adjacencyPairs.add(adjacency.a() + "|" + adjacency.b());
+      adjacencyPairs.add(adjacency.b() + "|" + adjacency.a());
+    }
+    for (Map.Entry<String, Railway> entry : map.railways().entrySet()) {
+      Railway railway = entry.getValue();
+      if (!entry.getKey().equals(railway.id())) {
+        error(issues, "RAILWAY_KEY_ID_MISMATCH",
+            "railways key=" + entry.getKey() + " id=" + railway.id());
+      }
+      List<String> path = railway.provincePath();
+      for (int i = 0; i < path.size(); i++) {
+        Province province = map.provinces().get(path.get(i));
+        if (province == null) {
+          error(issues, "RAILWAY_PROVINCE_MISSING",
+              "铁路 " + railway.id() + " 引用不存在的省 " + path.get(i));
+          continue;
+        }
+        if (province.kind().equals("sea")) {
+          error(issues, "RAILWAY_ON_SEA",
+              "铁路 " + railway.id() + " 经过海省 " + path.get(i));
+        }
+        if (i > 0) {
+          String previous = path.get(i - 1);
+          if (!adjacencyPairs.contains(previous + "|" + path.get(i))) {
+            error(issues, "RAILWAY_NOT_ADJACENT",
+                "铁路 " + railway.id() + " 的相邻省无普通邻接: " + previous + " -> " + path.get(i));
+          }
+        }
+      }
+    }
+
     // 邻接：两端存在、不自环、无重复无向关系。
     Set<String> seenPairs = new HashSet<>();
     for (Adjacency adjacency : map.adjacencies()) {
@@ -126,7 +160,13 @@ public final class WorldMapValidator {
       if (!map.provinces().containsKey(adjacency.b())) {
         error(issues, "ADJACENCY_PROVINCE_MISSING", "邻接引用不存在的省 " + adjacency.b());
       }
-      String pair = adjacency.a() + "|" + adjacency.b() + "|" + adjacency.kind();
+      if (adjacency.through() != null && !map.provinces().containsKey(adjacency.through())) {
+        error(issues, "ADJACENCY_THROUGH_MISSING",
+            "邻接 " + adjacency.a() + "<->" + adjacency.b()
+                + " 的 through 省不存在: " + adjacency.through());
+      }
+      String pair = adjacency.a() + "|" + adjacency.b() + "|" + adjacency.kind()
+          + "|" + adjacency.through();
       if (!seenPairs.add(pair)) {
         error(issues, "ADJACENCY_DUPLICATE", "重复邻接 " + pair);
       }

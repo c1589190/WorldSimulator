@@ -45,6 +45,12 @@ class MapAddressResolverTest {
     assertEquals("supplyHub:depot-west", hub.stableId());
     assertEquals("depot-west", hub.displayName());
     assertInstanceOf(SupplyHub.class, hub.value());
+
+    var railway = MapAddressResolver.resolve(map,
+        NodeAddress.parse("tree1-360/map/railway/rail-main"));
+    assertEquals("railway:rail-main", railway.stableId());
+    assertEquals("rail-main", railway.displayName());
+    assertInstanceOf(Railway.class, railway.value());
   }
 
   @Test

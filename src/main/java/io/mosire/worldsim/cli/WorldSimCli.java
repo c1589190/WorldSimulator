@@ -7,6 +7,7 @@ import io.mosire.worldsim.importer.Hoi4CommunityMapImporter;
 import io.mosire.worldsim.json.JsonCodec;
 import io.mosire.worldsim.map.MapAddressResolver;
 import io.mosire.worldsim.map.Province;
+import io.mosire.worldsim.map.Railway;
 import io.mosire.worldsim.map.State;
 import io.mosire.worldsim.map.StrategicRegion;
 import io.mosire.worldsim.map.SupplyHub;
@@ -313,6 +314,10 @@ public final class WorldSimCli {
       case SupplyHub hub -> {
         detail.put("provinceId", hub.provinceId());
         detail.put("level", hub.level());
+      }
+      case Railway railway -> {
+        detail.put("level", railway.level());
+        detail.put("provinceCount", railway.provincePath().size());
       }
       default -> detail.put("valueClass", resolved.value().getClass().getName());
     }

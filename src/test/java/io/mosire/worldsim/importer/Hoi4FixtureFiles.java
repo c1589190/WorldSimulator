@@ -24,6 +24,11 @@ public final class Hoi4FixtureFiles {
             + "2;0;255;0;land;false;forest;1\n",
         StandardCharsets.ISO_8859_1);
     Files.writeString(mapDir.resolve("supply_nodes.txt"), "1 1", StandardCharsets.UTF_8);
+    Files.writeString(mapDir.resolve("railways.txt"), "1 2 1 2", StandardCharsets.UTF_8);
+    Files.writeString(mapDir.resolve("adjacencies.csv"),
+        "From;To;Type;Through;start_x;start_y;stop_x;stop_y;adjacency_rule_name;Comment\n"
+            + "1;2;sea;1;-1;-1;-1;-1;;Test crossing\n",
+        StandardCharsets.UTF_8);
 
     Files.writeString(statesDir.resolve("1-Alpha.txt"), """
         state = {

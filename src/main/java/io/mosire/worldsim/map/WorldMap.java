@@ -26,6 +26,7 @@ public record WorldMap(
     Map<String, State> states,
     Map<String, StrategicRegion> strategicRegions,
     Map<String, SupplyHub> supplyHubs,
+    Map<String, Railway> railways,
     List<Adjacency> adjacencies) {
 
   public WorldMap {
@@ -42,12 +43,15 @@ public record WorldMap(
     states = sortedById(states, "states");
     strategicRegions = sortedById(strategicRegions, "strategicRegions");
     supplyHubs = sortedById(supplyHubs, "supplyHubs");
+    railways = sortedById(railways, "railways");
 
     List<Adjacency> normalized = new ArrayList<>(Objects.requireNonNull(adjacencies, "adjacencies"));
     for (Adjacency adjacency : normalized) {
       Objects.requireNonNull(adjacency, "adjacency");
     }
-    normalized.sort(Comparator.comparing(Adjacency::a).thenComparing(Adjacency::b).thenComparing(Adjacency::kind));
+    normalized.sort(Comparator.comparing(Adjacency::a).thenComparing(Adjacency::b)
+        .thenComparing(Adjacency::kind)
+        .thenComparing(Adjacency::through, Comparator.nullsFirst(String::compareTo)));
     adjacencies = List.copyOf(normalized);
   }
 
@@ -80,6 +84,7 @@ public record WorldMap(
     private final Map<String, State> states = new LinkedHashMap<>();
     private final Map<String, StrategicRegion> regions = new LinkedHashMap<>();
     private final Map<String, SupplyHub> supplyHubs = new LinkedHashMap<>();
+    private final Map<String, Railway> railways = new LinkedHashMap<>();
     private final List<Adjacency> adjacencies = new ArrayList<>();
 
     private Builder(String id, String name, double width, double height) {
@@ -109,6 +114,15 @@ public record WorldMap(
       return this;
     }
 
+    public Builder railway(Railway value) {
+      railways.put(value.id(), value);
+      return this;
+    }
+
+    public Builder railway(String id, int level, List<String> provincePath) {
+      return railway(new Railway(id, level, provincePath));
+    }
+
     public Builder adjacency(Adjacency value) {
       adjacencies.add(value);
       return this;
@@ -127,7 +141,7 @@ public record WorldMap(
     }
 
     public WorldMap build() {
-      return new WorldMap(id, name, width, height, provinces, states, regions, supplyHubs, adjacencies);
+      return new WorldMap(id, name, width, height, provinces, states, regions, supplyHubs, railways, adjacencies);
     }
   }
 }

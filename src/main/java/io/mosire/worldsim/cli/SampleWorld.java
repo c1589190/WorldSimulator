@@ -33,7 +33,8 @@ public final class SampleWorld {
         .province(province(EAST, "East", ringB(), new Vec2(150, 50)))
         .state(new State(STATE, "Heartland", List.of(WEST, EAST)))
         .strategicRegion(new StrategicRegion(REGION, "Core", List.of(WEST, EAST)))
-        .supplyHub(new SupplyHub("depot-west", WEST, 3));
+        .supplyHub(new SupplyHub("depot-west", WEST, 3))
+        .railway("rail-main", 1, List.of(WEST, EAST));
     return builder.deriveAdjacencies().build();
   }
 

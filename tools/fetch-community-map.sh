@@ -4,9 +4,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEST="${1:-$ROOT/runtime/imports/MappaMundi}"
-REPO="${MAPPAMUNDI_REPO:-https://github.com/N0zza/MappaMundi.git}"
-COMMIT="${MAPPAMUNDI_COMMIT:-7a7afbf04ef64b715ff1ebf95380f73a7d02b21a}"
+DEST="${1:-$ROOT/runtime/imports/MagnaEuropa}"
+REPO="${COMMUNITY_MAP_REPO:-${MAPPAMUNDI_REPO:-https://github.com/AzurCrystal/Magna-Europa.git}}"
+COMMIT="${COMMUNITY_MAP_COMMIT:-${MAPPAMUNDI_COMMIT:-d7a57759c188a034c49a0e96aceb1702fa76fc74}}"
 
 mkdir -p "$(dirname "$DEST")"
 if [[ -d "$DEST/.git" ]]; then
@@ -23,14 +23,17 @@ fi
 git -C "$DEST" sparse-checkout init --no-cone
 git -C "$DEST" sparse-checkout set \
   README.md \
-  mappamundi.mod \
+  "Magna Europa.mod" \
+  descriptor.mod \
   map/provinces.bmp \
   map/definition.csv \
+  map/adjacencies.csv \
   map/heightmap.bmp \
   map/supply_nodes.txt \
+  map/railways.txt \
   map/strategicregions \
   history/states \
-  localisation
+  localisation/english
 git -C "$DEST" checkout --detach "$COMMIT"
 
 cat > "$DEST/.worldsim-source.txt" <<SOURCE

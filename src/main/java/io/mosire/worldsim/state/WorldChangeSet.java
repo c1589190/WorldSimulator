@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.mosire.worldsim.json.JsonCodec;
 import io.mosire.worldsim.map.Adjacency;
 import io.mosire.worldsim.map.Province;
+import io.mosire.worldsim.map.Railway;
 import io.mosire.worldsim.map.State;
 import io.mosire.worldsim.map.StrategicRegion;
 import io.mosire.worldsim.map.SupplyHub;
@@ -59,6 +60,7 @@ public record WorldChangeSet(List<WorldChange> changes) {
     Map<String, State> states = new LinkedHashMap<>(base.map().states());
     Map<String, StrategicRegion> regions = new LinkedHashMap<>(base.map().strategicRegions());
     Map<String, SupplyHub> hubs = new LinkedHashMap<>(base.map().supplyHubs());
+    Map<String, Railway> railways = new LinkedHashMap<>(base.map().railways());
     List<Adjacency> adjacencies = new ArrayList<>(base.map().adjacencies());
 
     for (WorldChange change : changes) {
@@ -81,6 +83,7 @@ public record WorldChangeSet(List<WorldChange> changes) {
             }
           }
           hubs.entrySet().removeIf(entry -> entry.getValue().provinceId().equals(op.provinceId()));
+          railways.entrySet().removeIf(entry -> entry.getValue().provincePath().contains(op.provinceId()));
           adjacencies.removeIf(adj -> adj.a().equals(op.provinceId()) || adj.b().equals(op.provinceId()));
         }
         case WorldChange.PutState op -> states.put(op.state().id(), op.state());
@@ -107,6 +110,8 @@ public record WorldChangeSet(List<WorldChange> changes) {
         }
         case WorldChange.PutSupplyHub op -> hubs.put(op.supplyHub().id(), op.supplyHub());
         case WorldChange.RemoveSupplyHub op -> hubs.remove(op.supplyHubId());
+        case WorldChange.PutRailway op -> railways.put(op.railway().id(), op.railway());
+        case WorldChange.RemoveRailway op -> railways.remove(op.railwayId());
         case WorldChange.ReplaceAdjacencies op -> {
           adjacencies.clear();
           adjacencies.addAll(op.adjacencies());
@@ -114,7 +119,7 @@ public record WorldChangeSet(List<WorldChange> changes) {
       }
     }
     WorldMap next = new WorldMap(base.map().id(), base.map().name(), base.map().width(), base.map().height(),
-        provinces, states, regions, hubs, adjacencies);
+        provinces, states, regions, hubs, railways, adjacencies);
     return base.withMap(next);
   }
 }

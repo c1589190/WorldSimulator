@@ -2,6 +2,7 @@ package io.mosire.worldsim.importer;
 
 import io.mosire.worldsim.map.Adjacency;
 import io.mosire.worldsim.map.Province;
+import io.mosire.worldsim.map.Railway;
 import io.mosire.worldsim.map.State;
 import io.mosire.worldsim.map.StrategicRegion;
 import io.mosire.worldsim.map.SupplyHub;
@@ -20,6 +21,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -112,8 +114,15 @@ public final class Hoi4CommunityMapImporter {
     Map<String, StrategicRegion> regions = buildRegions(regionData, localisation);
     Map<String, SupplyHub> supplyHubs = parseSupplyHubs(root.resolve("map/supply_nodes.txt"),
         usedProvinceIds, kinds.kinds(), warnings);
+    Map<String, Railway> railways = parseRailways(root.resolve("map/railways.txt"),
+        usedProvinceIds, kinds.kinds(), warnings);
 
-    WorldMap.Builder map = WorldMap.builder("mappa-mundi", "Mappa Mundi", raster.width(), raster.height());
+    String sourceName = root.getFileName() == null ? "hoi4-map" : root.getFileName().toString();
+    String worldId = sourceName.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9._-]+", "-");
+    if (worldId.isBlank()) {
+      worldId = "hoi4-map";
+    }
+    WorldMap.Builder map = WorldMap.builder(worldId, sourceName, raster.width(), raster.height());
     for (int id : usedProvinceIds) {
       Definition definition = definitions.byId()[id];
       if (definition == null) {
@@ -138,11 +147,12 @@ public final class Hoi4CommunityMapImporter {
           polygons.displayPoints().get(id),
           stateId,
           regionId,
-          List.of("hoi4", "mappa-mundi", "hoi4-province:" + id)));
+          List.of("hoi4", worldId, "hoi4-province:" + id)));
     }
     states.values().forEach(map::state);
     regions.values().forEach(map::strategicRegion);
     supplyHubs.values().forEach(map::supplyHub);
+    railways.values().forEach(map::railway);
 
     List<Adjacency> adjacencies = new ArrayList<>();
     for (Map.Entry<Long, Integer> entry : polygons.borderLengths().entrySet()) {
@@ -154,6 +164,9 @@ public final class Hoi4CommunityMapImporter {
       adjacencies.add(new Adjacency(Integer.toString(a), Integer.toString(b),
           adjacencyKind(kinds.kinds()[a], kinds.kinds()[b]), entry.getValue().doubleValue()));
     }
+    List<Adjacency> specialAdjacencies = parseSpecialAdjacencies(
+        root.resolve("map/adjacencies.csv"), usedProvinceIds, adjacencies, warnings);
+    adjacencies.addAll(specialAdjacencies);
     adjacencies.forEach(map::adjacency);
     WorldMap worldMap = map.build();
     List<ValidationIssue> issues = WorldMapValidator.validate(worldMap);
@@ -171,6 +184,7 @@ public final class Hoi4CommunityMapImporter {
         regions.size(),
         adjacencies.size(),
         supplyHubs.size(),
+        railways.size(),
         polygons.ringsTraced(),
         polygons.repaired(),
         kinds.inferredSeaProvinces(),
@@ -296,6 +310,118 @@ public final class Hoi4CommunityMapImporter {
       hubs.putIfAbsent(hubId, new SupplyHub(hubId, Integer.toString(provinceId), 1));
     }
     return hubs;
+  }
+
+  private static List<Adjacency> parseSpecialAdjacencies(Path file, Set<Integer> used,
+      List<Adjacency> existing, List<String> warnings) {
+    if (!Files.isRegularFile(file)) {
+      warnings.add("缺少 map/adjacencies.csv，跳过特殊邻接");
+      return List.of();
+    }
+    List<String> lines;
+    try {
+      lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      throw new Hoi4ImportException("HOI4_ADJACENCY_READ_FAILED", "读取 adjacencies.csv 失败", e);
+    }
+    Set<String> seen = new java.util.HashSet<>();
+    for (Adjacency adjacency : existing) {
+      seen.add(adjacency.a() + "|" + adjacency.b() + "|" + adjacency.kind());
+    }
+    List<Adjacency> special = new ArrayList<>();
+    for (int lineIndex = 0; lineIndex < lines.size(); lineIndex++) {
+      String line = lines.get(lineIndex).strip();
+      if (line.isEmpty() || line.startsWith("#") || line.startsWith("From;")) {
+        continue;
+      }
+      String[] fields = line.split(";", -1);
+      if (fields.length < 3) {
+        warnings.add("adjacency 行列数不足，跳过 line=" + (lineIndex + 1));
+        continue;
+      }
+      int from;
+      int to;
+      try {
+        from = Integer.parseInt(fields[0].trim());
+        to = Integer.parseInt(fields[1].trim());
+      } catch (NumberFormatException e) {
+        warnings.add("adjacency 行 ID 非整数，跳过 line=" + (lineIndex + 1));
+        continue;
+      }
+      if (from == to || !used.contains(from) || !used.contains(to)) {
+        continue;
+      }
+      String type = fields[2].trim();
+      String kind = type.isEmpty() ? "special" : "special-" + type;
+      String through = null;
+      if (fields.length > 3 && !fields[3].isBlank() && !fields[3].trim().equals("-1")) {
+        through = fields[3].trim();
+      }
+      try {
+        Adjacency adjacency = new Adjacency(
+            Integer.toString(from), Integer.toString(to), kind, 0, through);
+        if (seen.add(adjacency.a() + "|" + adjacency.b() + "|" + adjacency.kind())) {
+          special.add(adjacency);
+        }
+      } catch (IllegalArgumentException e) {
+        warnings.add("adjacency 行非法，跳过 line=" + (lineIndex + 1) + ": " + e.getMessage());
+      }
+    }
+    return special;
+  }
+
+  private static Map<String, Railway> parseRailways(Path file, Set<Integer> used,
+      String[] kinds, List<String> warnings) {
+    if (!Files.isRegularFile(file)) {
+      warnings.add("缺少 map/railways.txt，导入零条 railway");
+      return Map.of();
+    }
+    List<String> lines;
+    try {
+      lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      throw new Hoi4ImportException("HOI4_RAILWAY_READ_FAILED", "读取 railways.txt 失败", e);
+    }
+    Map<String, Railway> railways = new LinkedHashMap<>();
+    for (int lineIndex = 0; lineIndex < lines.size(); lineIndex++) {
+      String line = lines.get(lineIndex).strip();
+      if (line.isEmpty() || line.startsWith("#")) {
+        continue;
+      }
+      List<Integer> tokens = ints(line);
+      if (tokens.size() < 4) {
+        warnings.add("railway 行少于 level+count+2 省，跳过 line=" + (lineIndex + 1));
+        continue;
+      }
+      int level = tokens.get(0);
+      int provinceCount = tokens.get(1);
+      if (provinceCount < 2 || tokens.size() != provinceCount + 2) {
+        warnings.add("railway 行 count 与省数不匹配，跳过 line=" + (lineIndex + 1));
+        continue;
+      }
+      List<String> path = new ArrayList<>();
+      boolean valid = level >= 1;
+      for (int i = 2; i < tokens.size(); i++) {
+        int provinceId = tokens.get(i);
+        if (!used.contains(provinceId) || provinceId >= kinds.length
+            || !kinds[provinceId].equals("land")) {
+          valid = false;
+          break;
+        }
+        path.add(Integer.toString(provinceId));
+      }
+      if (!valid) {
+        warnings.add("railway 行引用无效/非陆省，跳过 line=" + (lineIndex + 1));
+        continue;
+      }
+      String id = String.format("railway-%04d", lineIndex + 1);
+      try {
+        railways.put(id, new Railway(id, level, path));
+      } catch (IllegalArgumentException e) {
+        warnings.add("railway 行非法，跳过 line=" + (lineIndex + 1) + ": " + e.getMessage());
+      }
+    }
+    return railways;
   }
 
   private static DefinitionTable parseDefinitions(Path file) {
@@ -707,6 +833,7 @@ public final class Hoi4CommunityMapImporter {
       int regions,
       int adjacencies,
       int supplyHubs,
+      int railways,
       int rings,
       int repairedPolygons,
       int inferredSeaProvinces,

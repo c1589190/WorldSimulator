@@ -26,8 +26,12 @@ class Hoi4CommunityMapImporterTest {
     assertEquals(2, map.provinces().size());
     assertEquals(2, map.states().size());
     assertEquals(1, map.strategicRegions().size());
-    assertEquals(1, map.adjacencies().size());
+    assertEquals(2, map.adjacencies().size());
+    assertEquals("special-sea", map.adjacencies().get(1).kind());
+    assertEquals("1", map.adjacencies().get(1).through());
     assertEquals(1, map.supplyHubs().size());
+    assertEquals(1, map.railways().size());
+    assertEquals("1", map.railways().get("railway-0001").provincePath().get(0));
     assertTrue(WorldMapValidator.validate(map).isEmpty());
 
     var p1 = map.provinces().get("1");
@@ -53,8 +57,9 @@ class Hoi4CommunityMapImporterTest {
     assertEquals(2, result.stats().usedProvinces());
     assertEquals(2, result.stats().states());
     assertEquals(1, result.stats().regions());
-    assertEquals(1, result.stats().adjacencies());
+    assertEquals(2, result.stats().adjacencies());
     assertEquals(1, result.stats().supplyHubs());
+    assertEquals(1, result.stats().railways());
     assertEquals(0, result.stats().inferredSeaProvinces());
     assertTrue(result.warnings().isEmpty(), () -> result.warnings().toString());
   }
