@@ -18,6 +18,7 @@
 | 规模/schema/多进程证据 | [`superpowers/reports/2026-11-17-headless-core-hardening-report.md`](superpowers/reports/2026-11-17-headless-core-hardening-report.md) |
 | 社区地图导入计划 | [`superpowers/plans/2026-11-17-community-map-import.md`](superpowers/plans/2026-11-17-community-map-import.md) |
 | Magna Europa 全量导入证据 | [`superpowers/reports/2026-11-17-magna-europa-import-report.md`](superpowers/reports/2026-11-17-magna-europa-import-report.md) |
+| 第一阶段收尾审计 | [`superpowers/reports/2026-11-17-phase1-gap-audit.md`](superpowers/reports/2026-11-17-phase1-gap-audit.md) |
 | Mappa Mundi 历史证据 | [`superpowers/reports/2026-11-17-mappa-mundi-import-report.md`](superpowers/reports/2026-11-17-mappa-mundi-import-report.md) |
 | 渲染方案比较 | [`superpowers/reports/2026-11-17-renderer-options.md`](superpowers/reports/2026-11-17-renderer-options.md) |
 | 邻仓/DSH ORBAT 侦察证据 | [`superpowers/reports/2026-11-17-neighbor-projects-recon.md`](superpowers/reports/2026-11-17-neighbor-projects-recon.md) |

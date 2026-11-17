@@ -1,8 +1,8 @@
 # STATUS.md —— 当前状态
 
 > **更新时间**：2026-11-17 12:39 UTC（20:39 CST）
-> **当前目标**：使用可靠社区地图源导入完整静态地图数据。
-> **当前阶段**：Magna Europa Reforged 全量导入、railway/supply/region 建模、genesis、回放与地址解析完成。
+> **当前目标**：第一阶段收尾审计与可靠社区地图源导入。
+> **当前阶段**：设计 §8.3 验收判据已覆盖；Magna Europa Reforged 全量导入/回放完成；WorldSimulator MCP 未实现。
 > **当前责任区**：`docs/superpowers/plans/2026-11-17-community-map-import.md`（已完成）。
 
 ## 源码基线
@@ -37,6 +37,7 @@
 - Headless Core 实现/硬化计划：`docs/superpowers/plans/2026-11-17-headless-core.md`、`docs/superpowers/plans/2026-11-17-headless-core-hardening.md`
 - 社区地图导入计划：`docs/superpowers/plans/2026-11-17-community-map-import.md`
 - Magna 导入证据：`docs/superpowers/reports/2026-11-17-magna-europa-import-report.md`
+- 第一阶段收尾审计：`docs/superpowers/reports/2026-11-17-phase1-gap-audit.md`
 - Mappa 历史证据：`docs/superpowers/reports/2026-11-17-mappa-mundi-import-report.md`
 - 硬化证据：`docs/superpowers/reports/2026-11-17-headless-core-hardening-report.md`
 - 渲染方案比较：`docs/superpowers/reports/2026-11-17-renderer-options.md`
@@ -47,7 +48,7 @@
 
 | 项目 | 结果 | 证据 |
 |---|---|---|
-| 文档结构检查 | `PASS`（`python3 tools/check-docs.py`，rc=0） | 11 required / 2 specs / 5 reports |
+| 文档结构检查 | `PASS`（`python3 tools/check-docs.py`，rc=0） | 11 required / 2 specs / 6 reports |
 | 单测 | `PASS`（`mvn clean test`，rc=0） | 68 tests / 0 failure / 0 error |
 | 可运行打包 | `PASS`（`mvn -DskipTests package`，rc=0） | `target/worldsim-0.1.0-SNAPSHOT.jar`（约 16 MB） |
 | 下载脚本 | `PASS`（syntax + sparse/local 验证） | Magna 固定提交，含 map/states/regions/supply/rail |
@@ -102,7 +103,8 @@
 - 3 个省被 heightmap 推断为 sea；需真实地图视觉/引擎结果复核。
 - 全量导入约 27 秒、峰值约 1.54 GB；未放入 `mvn test`，自动测试使用 tiny BMP fixture。
 - `WorldMapValidator` 仍是大图导入/保存/回放的主要耗时。
-- 未实现 ORBAT/INFO 运行时、DM 权限、MCP 工具面、WebUI。
+- 未实现 ORBAT/INFO 运行时、DM 权限、WorldSimulator MCP、WebUI。
+- 当前会话可调用宿主提供的 MCP（如 `orbat_*`），但没有 WorldSimulator 自己的 MCP server/tool schema/权限面。
 - 渲染方案未定；WSL 到 Windows 浏览器 localhost 路径需实测。
 
 ## 下一步

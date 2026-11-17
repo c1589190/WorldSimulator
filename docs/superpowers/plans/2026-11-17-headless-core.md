@@ -1,6 +1,6 @@
 # Headless Core 实现计划
 
-> **状态**：已完成（2026-11-17；实现与验证见 STATUS）
+> **状态**：已完成（2026-11-17；验收与残余工程债见 `../reports/2026-11-17-phase1-gap-audit.md`）
 > **日期**：2026-11-17
 > **本文性质**：实现计划（派单责任区）；不是设计正本。
 > **用户原话（逐字，2026-11-17）**：
@@ -40,14 +40,15 @@
 
 ## 完成结果
 
-- SQLite store与 TimelineService 已落盘；
-- JUnit 47 tests 全绿；
-- CLI demo/replay/verify/tree 已运行；
+- SQLite store 与 TimelineService 已落盘；
+- §8.3 验收判据 10 条均有测试/CLI/文档证据；
+- 当前全套 JUnit 68 tests 全绿；
+- CLI demo/replay/verify/tree/import-hoi4 已运行；
+- Magna Europa 全量地图导入并回放通过；
 - 文档检查 `PASS`。
 
-## 未验证边界
+## 未验证边界 / 后续
 
-- 真实 1 万+ polygon 的性能压测；
-- 并发多进程写入；
-- ORBAT/INFO 扩展 ChangeSet；
-- 渲染器。
+- 已补真实 2 万+ province 导入和多进程写竞争；全量导入不在 `mvn test`。
+- 尚未实现：ORBAT/INFO ChangeSet、通用 resolver、MCP/AgentLib tool surface、DM 权限、WebUI/渲染器。
+- State→StrategicRegion 一致性、SupplyHub capacity/range、显式 expectedContentHash CAS 是残余工程债；详见阶段审计。
