@@ -13,6 +13,8 @@ Agent 导向的世界模拟器/编辑器。当前实现的是 **headless core**�
 - SQLite 时间线：`(branch, tick)` 节点、父子 DAG、ChangeSet JSON、full-state checkpoint；
 - `TimelineService`：genesis、open、apply、discard、save、fork、replay/hash 自检；
 - 同分支只能从 head 推进；历史节点只能 fork；不做原地改写/rebase；
+- SQLite schema `user_version` 门禁与 v0→v1 最小迁移；
+- 合成 300/500 省 benchmark；两个真实 JVM 的写竞争测试；
 - 最小 CLI 与 JUnit 测试。
 
 尚未实现：ORBAT、INFO、DM/决策人权限、MCP 工具面、WebUI。人类客户端定位为只读查看器。
@@ -26,7 +28,7 @@ mvn clean test
 mvn -DskipTests package
 ```
 
-`mvn test` 当前为 47 个测试。
+`mvn test` 当前为 55 个测试。
 
 ## CLI
 
@@ -36,6 +38,10 @@ java -jar target/worldsim-0.1.0-SNAPSHOT.jar demo --db runtime/demo.db --reset
 
 # 查看分支/节点
 java -jar target/worldsim-0.1.0-SNAPSHOT.jar tree --db runtime/demo.db
+
+# 合成 300 省（20×15）polygon 世界，测量生成/校验/保存/回放
+java -jar target/worldsim-0.1.0-SNAPSHOT.jar benchmark \
+  --db runtime/benchmark.db --reset --columns 20 --rows 15
 
 # 回放某个节点（checkpoint + delta）并校验
 java -jar target/worldsim-0.1.0-SNAPSHOT.jar replay --db runtime/demo.db --node main-2
@@ -63,6 +69,8 @@ tree2-2 fork from main-1; delta from main-1, independent from main-2
 
 默认 checkpoint 策略：创世、每个分支首节点、以及分支第 N 个节点（`TimelineService` 默认 N=16；CLI demo 用 N=2）。
 
+SQLite schema 当前为 v1；新库自动写 `PRAGMA user_version=1`，更高版本会拒绝打开，v0 空库/旧开发库做最小迁移。
+
 ## 代码入口
 
 ```text
@@ -81,6 +89,7 @@ src/test/java/                               JUnit 5 tests
 - 地图 + ORBAT + INFO + 时间线设计：[`docs/superpowers/specs/2026-11-17-map-orbat-info-timeline-design.md`](docs/superpowers/specs/2026-11-17-map-orbat-info-timeline-design.md)
 - 文档入口：[`docs/README.md`](docs/README.md)
 - 实现计划：[`docs/superpowers/plans/2026-11-17-headless-core.md`](docs/superpowers/plans/2026-11-17-headless-core.md)
+- 硬化证据：[`docs/superpowers/reports/2026-11-17-headless-core-hardening-report.md`](docs/superpowers/reports/2026-11-17-headless-core-hardening-report.md)
 
 ## License
 

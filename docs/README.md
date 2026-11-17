@@ -1,6 +1,6 @@
 # WorldSimulator 文档入口
 
-> **当前阶段**：Headless Core 已实现（2026-11-17；47 tests；CLI/回放可运行）
+> **当前阶段**：Headless Core 硬化完成（2026-11-17；55 tests；300/500 省 benchmark；多进程写竞争已测）
 > **当前状态入口**：[`agents/STATUS.md`](agents/STATUS.md)  
 > **用户设计原稿**：[`superpowers/specs/2026-11-17-worldsim-architecture-design-source.md`](superpowers/specs/2026-11-17-worldsim-architecture-design-source.md)  
 > **文档系统规则**：[`AGENTS.md`](AGENTS.md)
@@ -14,6 +14,8 @@
 | 用户裁定逐字原话 | [`superpowers/specs/2026-11-17-worldsim-architecture-design-source.md`](superpowers/specs/2026-11-17-worldsim-architecture-design-source.md) |
 | 地图 + ORBAT + INFO + 时间线 + MCP 专题设计 | [`superpowers/specs/2026-11-17-map-orbat-info-timeline-design.md`](superpowers/specs/2026-11-17-map-orbat-info-timeline-design.md) |
 | Headless Core 实现计划/完成边界 | [`superpowers/plans/2026-11-17-headless-core.md`](superpowers/plans/2026-11-17-headless-core.md) |
+| Headless Core 硬化计划 | [`superpowers/plans/2026-11-17-headless-core-hardening.md`](superpowers/plans/2026-11-17-headless-core-hardening.md) |
+| 规模/schema/多进程证据 | [`superpowers/reports/2026-11-17-headless-core-hardening-report.md`](superpowers/reports/2026-11-17-headless-core-hardening-report.md) |
 | 渲染方案比较 | [`superpowers/reports/2026-11-17-renderer-options.md`](superpowers/reports/2026-11-17-renderer-options.md) |
 | 邻仓/DSH ORBAT 侦察证据 | [`superpowers/reports/2026-11-17-neighbor-projects-recon.md`](superpowers/reports/2026-11-17-neighbor-projects-recon.md) |
 | 设计裁定索引 | [`superpowers/DESIGN_RULINGS.md`](superpowers/DESIGN_RULINGS.md) |

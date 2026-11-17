@@ -1,17 +1,16 @@
 # STATUS.md —— 当前状态
 
-> **更新时间**：2026-11-17 11:28 UTC（19:28 CST）
-> **当前目标**：完成 headless core：静态 polygon 状态 + SQLite 时间线 + working copy/save/discard/fork/replay + CLI/测试。
-> **当前阶段**：实现与本地验证完成，等待用户评审；渲染方案仍待选型。
-> **当前责任区**：`docs/superpowers/plans/2026-11-17-headless-core.md`（已完成）。
+> **更新时间**：2026-11-17 11:35 UTC（19:35 CST）
+> **当前目标**：headless core 硬化：SQLite schema 版本、200–500 省 polygon benchmark、多进程写竞争验证。
+> **当前阶段**：硬化实现与验证完成，等待用户选择下一层；渲染方案仍待选型。
+> **当前责任区**：`docs/superpowers/plans/2026-11-17-headless-core-hardening.md`（已完成）。
 
 ## 源码基线
 
 - 仓库：`~/WorldSimulator`，单模块 Maven 工程，JDK 21。
-- Git：`main`；远程 `origin=git@github.com:c1589190/WorldSimulator.git`。
-- 远程已有初始提交：`e5c9cea Initial commit`（只含 `LICENSE`）。
-- 本地实现提交：`af1bd92 feat: implement headless polygon timeline core`；随后收尾提交包含 README、STATUS、CLI 测试与两处回放校验强化。
-- 工作树：收尾提交前有 README/STATUS/CLI 测试和回放校验改动；提交后以 `git status` 为准。
+- Git：`main`，跟踪 `origin/main`；远程 `git@github.com:c1589190/WorldSimulator.git`。
+- 上一轮远程基线：`430415d docs: finalize headless core status and README`。
+- 本轮硬化改动：SQLite schema v1、合成世界 generator、benchmark CLI、多进程 store 测试、硬化报告；本轮提交后以 `git log/status` 为准。
 - 运行环境：WSL；人类客户端定位为只读查看器，不做复杂编辑器。
 - 邻仓参考基线：
   - `~/SimulatorMosire` HEAD `7561b23b79d61f4a59a19ff441580523376c489f`；
@@ -22,7 +21,9 @@
 
 - 用户设计原稿（含第二轮/第三轮逐字裁定）：`docs/superpowers/specs/2026-11-17-worldsim-architecture-design-source.md`
 - 专题设计：`docs/superpowers/specs/2026-11-17-map-orbat-info-timeline-design.md`
-- 实现计划/完成边界：`docs/superpowers/plans/2026-11-17-headless-core.md`
+- Headless Core 实现计划：`docs/superpowers/plans/2026-11-17-headless-core.md`
+- Headless Core 硬化计划：`docs/superpowers/plans/2026-11-17-headless-core-hardening.md`
+- 硬化证据：`docs/superpowers/reports/2026-11-17-headless-core-hardening-report.md`
 - 渲染方案比较：`docs/superpowers/reports/2026-11-17-renderer-options.md`
 - 邻仓/DSH ORBAT 侦察：`docs/superpowers/reports/2026-11-17-neighbor-projects-recon.md`
 - 设计裁定索引：`docs/superpowers/DESIGN_RULINGS.md`
@@ -33,16 +34,18 @@
 
 | 项目 | 结果 | 证据 |
 |---|---|---|
-| 文档结构检查 | `PASS`（`python3 tools/check-docs.py`，rc=0） | 11 required / 2 specs / 2 reports |
-| 单测 | `PASS`（`mvn clean test`，rc=0） | 47 tests / 0 failure / 0 error |
+| 文档结构检查 | `PASS`（`python3 tools/check-docs.py`，rc=0） | 11 required / 2 specs / 3 reports |
+| 单测 | `PASS`（`mvn clean test`，rc=0） | 55 tests / 0 failure / 0 error |
 | 可运行打包 | `PASS`（`mvn -DskipTests package`，rc=0） | `target/worldsim-0.1.0-SNAPSHOT.jar`（约 16 MB） |
-| CLI demo | `PASS`（rc=0） | 4 节点；2 写入合并；discard 后 hash 复原；历史节点 fork 成功；`verifiedNodes=4` |
-| CLI verify/replay/tree | `PASS`（均 rc=0） | `/tmp/worldsim-cli-final/demo.db` |
-| JTS 真实规模压测 | `NOT_RUN` | 当前只有 2 省示例与单元级拓扑测试 |
-| 多进程 SQLite 并发 | `NOT_RUN` | 当前为单连接 + 方法级同步 |
+| 300 省 benchmark | `PASS`（rc=0） | 20×15；565 邻接；validationIssues=0；generate 130 ms / validate 36 ms / genesisSave 139 ms / deltaSave 117 ms / replay 43 ms |
+| 500 省 benchmark | `PASS`（rc=0） | 25×20；955 邻接；validationIssues=0；generate 152 ms / validate 43 ms / genesisSave 178 ms / deltaSave 109 ms / replay 33 ms |
+| 多进程写竞争 | `PASS`（1 test） | 两个真实 JVM 同时写 `main-1`，恰好一个成功，一个失败且无覆盖 |
+| CLI verify | `PASS`（rc=0） | `/tmp/worldsim-bench500/bench.db` → `verifiedNodes=2` |
 | 渲染方案 | 未选型 | `docs/superpowers/reports/2026-11-17-renderer-options.md` |
 
-## 已实现的 headless 闭环
+## 已实现
+
+### Headless core 基础
 
 - 严格 `NodeAddress`：`treeXXX-tickXXX[/<type>[/<id>...]]`，空白/空段/`.`/`..`/非法 tick/溢出均拒绝。
 - 原生 polygon 省形 + holes + multi-part；JTS 校验合法性、面积、重叠、显示点、边界、归属与邻接。
@@ -52,7 +55,14 @@
 - 回放：最近祖先 checkpoint + delta，逐节点 content hash 自检，最终状态再跑地图校验。
 - fork-only：历史节点 `openNext` 报 `TIMELINE_FORK_REQUIRED`；新分支首节点可任意晚于父 tick。
 - checkpoint 策略：创世、分支首节点、每 N 个节点（默认 N=16，CLI demo N=2）；checkpoint 是派生缓存。
-- 最小 CLI：`demo` / `tree` / `replay` / `verify`；JUnit 覆盖地址、polygon、ChangeSet、store、service、CLI。
+
+### 本轮硬化
+
+- SQLite schema `user_version=1`；更高版本拒绝；v0 空库/旧开发库最小迁移；初始化失败关闭连接。
+- 合成 polygon 世界：20×15=300 省、25×20=500 省，州按行、战略区域按行块，自动推导邻接。
+- `benchmark` CLI：记录生成、JTS 校验、genesis 保存、delta 保存、checkpoint+delta 回放耗时。
+- 两个真实 JVM 的 `main-1` 写竞争测试：主键/head 约束下无覆盖。
+- 55 个 JUnit 测试。
 
 ## 已记录的关键裁定
 
@@ -68,19 +78,18 @@
 
 ## 未验证 / 风险 / blocker
 
-- JTS 拓扑校验尚未在 200–500 省和 1 万+ polygon 真实规模上压测；邻接推导可能成为保存/校验热点。
-- SQLite 当前是单连接 + 同步方法，适合单进程 POC；未验证多进程并发、WAL 争用和崩溃恢复窗口。
-- `verifyAll` 逐节点重放，节点多时是近似全量重复读；后续需要按分支增量校验或批量报告。
-- SQLite schema 目前没有 `user_version`/迁移框架；后续扩展 ORBAT/INFO ChangeSet 前需要补。
-- 地址/实体分辨率只实现语法与地图 ID；通用 resolver、ORBAT/INFO 地址尚未实现。
-- 未实现 ORBAT/INFO 运行时、DM 权限、MCP 工具面、WebUI。
+- benchmark 使用规则矩形，不代表真实不规则 polygon 的 JTS 成本；时间是单机单次观测，不是 SLA。
+- 多进程测试只覆盖同节点竞争；未覆盖长事务、写队列、崩溃恢复、WAL checkpoint 压力和吞吐。
+- `verifyAll` 仍逐节点回放；节点多时成本近 O(n²)，后续需按分支批量校验。
+- schema 只有 v0→v1 初始化路径，尚无正式迁移框架。
+- 地址语法已严格，但通用实体 resolver 尚未实现；地图实体只能由代码按 ID 查。
+- ORBAT/INFO 运行时、DM 权限、MCP 工具面、WebUI 未实现。
+- ORBAT 模板/初始编成/运行时实例边界、INFO 多包协议仍需用户裁定/细化。
+- 渲染方案未定；WSL 到 Windows 浏览器 localhost 端口转发需实测。
 - `~/SimulatorMosire` 没有根 LICENSE；只能参考行为，不能默认复制代码。
-- DSH `mil-org` 兼容导出非无损；原生 ORBAT 尚未实现。
-- 渲染方案未定；WSL 到 Windows 浏览器的 localhost 端口转发需实测。
 
 ## 下一步
 
-1. 用户评审 headless core 的时间线语义、fork tick 规则和 SQLite API；有异议先改设计与测试。
-2. 若核心通过，补 200–500 省 polygon 压测与多进程 SQLite 并发测试。
-3. 再按专题设计扩展 ORBAT/INFO ChangeSet、实体 resolver 与 MCP 工具面。
-4. 渲染方案暂不落代码；等用户选择 WSL 后端 + Windows 浏览器 WebGL2 路线后再做只读 viewer。
+1. 实现静态地图实体 resolver（`map/province/<id>`、`map/state/<id>`、`map/region/<id>`、`map/supplyHub/<id>`），为 INFO/MCP 的地址查询打底。
+2. 与用户确认 ORBAT 模板/初始编成/运行时实例边界和 INFO 多包协议后，再扩展 ORBAT/INFO ChangeSet。
+3. 渲染方案仍需用户选择；选 WSL 后端 + Windows 浏览器 WebGL2 后才开始只读 viewer。
