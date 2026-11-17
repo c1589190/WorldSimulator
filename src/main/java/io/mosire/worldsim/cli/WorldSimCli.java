@@ -3,6 +3,7 @@ package io.mosire.worldsim.cli;
 import io.mosire.worldsim.address.BranchId;
 import io.mosire.worldsim.address.NodeAddress;
 import io.mosire.worldsim.address.NodeRef;
+import io.mosire.worldsim.importer.Hoi4CommunityMapImporter;
 import io.mosire.worldsim.json.JsonCodec;
 import io.mosire.worldsim.map.MapAddressResolver;
 import io.mosire.worldsim.map.Province;
@@ -37,7 +38,7 @@ public final class WorldSimCli {
     }
   }
 
-  static int run(String[] args) {
+  public static int run(String[] args) {
     if (args.length == 0 || args[0].equals("help") || args[0].equals("--help")) {
       usage();
       return args.length == 0 ? 2 : 0;
@@ -45,6 +46,7 @@ public final class WorldSimCli {
     try {
       return switch (args[0]) {
         case "demo" -> demo(options(args, 1));
+        case "import-hoi4" -> importHoi4(options(args, 1));
         case "benchmark" -> benchmark(options(args, 1));
         case "resolve" -> resolve(options(args, 1));
         case "replay" -> replay(options(args, 1));
@@ -142,6 +144,44 @@ public final class WorldSimCli {
       report.put("dirtyHashDiscarded", dirtyHash);
       report.put("historicalAdvanceRejected", historyRejected);
       report.put("forkIndependent", true);
+      report.put("verifiedNodes", verified);
+      System.out.println(JsonCodec.prettyJson(report));
+      return 0;
+    }
+  }
+
+  private static int importHoi4(Map<String, String> options) {
+    Path source = Path.of(required(options, "--source")).toAbsolutePath().normalize();
+    Path db = Path.of(options.getOrDefault("--db", "runtime/worlds/community-map.db"));
+    if (!prepareFreshDatabase(db, options.containsKey("--reset"))) {
+      return 1;
+    }
+    String savedBy = options.getOrDefault("--saved-by", "gm:import-hoi4");
+
+    Hoi4CommunityMapImporter importer = new Hoi4CommunityMapImporter();
+    long importStart = System.nanoTime();
+    Hoi4CommunityMapImporter.ImportResult imported = importer.importWorld(source);
+    long importedAt = System.nanoTime();
+
+    try (SqliteTimelineStore store = new SqliteTimelineStore(db)) {
+      TimelineService service = new TimelineService(store);
+      TimelineNode genesis = service.createGenesis(imported.state(), savedBy);
+      long savedAt = System.nanoTime();
+      int verified = service.verifyAll();
+      long verifiedAt = System.nanoTime();
+
+      Map<String, Object> report = new LinkedHashMap<>();
+      report.put("source", source.toString());
+      report.put("database", db.toAbsolutePath().toString());
+      report.put("genesis", genesis.ref().toString());
+      report.put("head", service.store().head(new BranchId("main")).orElseThrow().toString());
+      report.put("stateHash", imported.state().contentHash());
+      report.put("stats", imported.stats());
+      report.put("warnings", imported.warnings());
+      report.put("timingsMillis", Map.of(
+          "import", millis(importedAt - importStart),
+          "genesisSave", millis(savedAt - importedAt),
+          "verifyAll", millis(verifiedAt - savedAt)));
       report.put("verifiedNodes", verified);
       System.out.println(JsonCodec.prettyJson(report));
       return 0;
@@ -408,7 +448,9 @@ public final class WorldSimCli {
   private static void usage() {
     System.out.println("""
         WorldSimulator headless core CLI
-          demo      [--db <path>] [--reset]        完整 genesis/apply/discard/save/fork/replay 演示
+          demo        [--db <path>] [--reset]      完整 genesis/apply/discard/save/fork/replay 演示
+          import-hoi4 --source <dir> [--db <path>] [--reset] [--saved-by <id>]
+                                                   导入下载的 HOI4 社区地图为原生 polygon 世界
           benchmark [--db <path>] [--reset] [--columns N] [--rows N] [--cell-size N]
                                                      生成合成 polygon 世界并测量校验/保存/回放
           resolve   --db <path> --address <node-address>

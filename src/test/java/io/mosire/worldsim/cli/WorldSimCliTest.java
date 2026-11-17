@@ -2,6 +2,7 @@ package io.mosire.worldsim.cli;
 
 import io.mosire.worldsim.address.BranchId;
 import io.mosire.worldsim.address.NodeRef;
+import io.mosire.worldsim.importer.Hoi4FixtureFiles;
 import io.mosire.worldsim.state.StaticWorldState;
 import io.mosire.worldsim.timeline.SqliteTimelineStore;
 import io.mosire.worldsim.timeline.TimelineService;
@@ -42,6 +43,25 @@ class WorldSimCliTest {
       assertEquals("West revised", main2.map().provinces().get(SampleWorld.WEST).name());
       assertEquals("East fork", fork.map().provinces().get(SampleWorld.EAST).name());
       assertEquals("West", fork.map().provinces().get(SampleWorld.WEST).name());
+    }
+  }
+
+  @Test
+  void importHoi4CommandWritesReplayableCommunityMapGenesis(@TempDir Path tempDir) throws Exception {
+    Path source = Hoi4FixtureFiles.write(tempDir.resolve("community-map"));
+    Path db = tempDir.resolve("mappa.db");
+    CliResult result = capture(() -> WorldSimCli.run(new String[]{
+        "import-hoi4", "--source", source.toString(), "--db", db.toString(), "--reset"}));
+
+    assertEquals(0, result.exit(), result.stderr());
+    assertTrue(result.stdout().contains("\"usedProvinces\" : 2"), result.stdout());
+    assertTrue(result.stdout().contains("\"verifiedNodes\" : 1"), result.stdout());
+
+    try (SqliteTimelineStore store = new SqliteTimelineStore(db)) {
+      TimelineService service = new TimelineService(store);
+      assertEquals(1, service.verifyAll());
+      assertEquals(2, service.load(new NodeRef(new BranchId("main"), 0))
+          .map().provinces().size());
     }
   }
 
