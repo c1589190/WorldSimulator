@@ -64,6 +64,20 @@ class WorldSimCliTest {
   }
 
   @Test
+  void resolveCommandReturnsStableMapEntityAtNode(@TempDir Path tempDir) {
+    Path db = tempDir.resolve("demo.db");
+    assertEquals(0, capture(() -> WorldSimCli.run(new String[]{
+        "demo", "--db", db.toString(), "--reset"})).exit());
+
+    CliResult result = capture(() -> WorldSimCli.run(new String[]{
+        "resolve", "--db", db.toString(), "--address", "main-2/map/province/east"}));
+    assertEquals(0, result.exit(), result.stderr());
+    assertTrue(result.stdout().contains("\"stableId\" : \"province:east\""), result.stdout());
+    assertTrue(result.stdout().contains("\"displayName\" : \"East revised\""), result.stdout());
+    assertTrue(result.stdout().contains("\"kind\" : \"province\""), result.stdout());
+  }
+
+  @Test
   void replayAndVerifyCommandsReturnZero(@TempDir Path tempDir) {
     Path db = tempDir.resolve("demo.db");
     assertEquals(0, capture(() -> WorldSimCli.run(new String[]{

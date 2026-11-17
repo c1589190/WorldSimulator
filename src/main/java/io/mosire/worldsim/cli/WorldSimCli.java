@@ -4,6 +4,11 @@ import io.mosire.worldsim.address.BranchId;
 import io.mosire.worldsim.address.NodeAddress;
 import io.mosire.worldsim.address.NodeRef;
 import io.mosire.worldsim.json.JsonCodec;
+import io.mosire.worldsim.map.MapAddressResolver;
+import io.mosire.worldsim.map.Province;
+import io.mosire.worldsim.map.State;
+import io.mosire.worldsim.map.StrategicRegion;
+import io.mosire.worldsim.map.SupplyHub;
 import io.mosire.worldsim.map.WorldMapValidator;
 import io.mosire.worldsim.state.StaticWorldState;
 import io.mosire.worldsim.state.WorldChange;
@@ -41,6 +46,7 @@ public final class WorldSimCli {
       return switch (args[0]) {
         case "demo" -> demo(options(args, 1));
         case "benchmark" -> benchmark(options(args, 1));
+        case "resolve" -> resolve(options(args, 1));
         case "replay" -> replay(options(args, 1));
         case "verify" -> verify(options(args, 1));
         case "tree" -> tree(options(args, 1));
@@ -231,6 +237,48 @@ public final class WorldSimCli {
     }
   }
 
+  private static int resolve(Map<String, String> options) {
+    Path db = requiredDb(options);
+    NodeAddress address = NodeAddress.parse(required(options, "--address"));
+    try (SqliteTimelineStore store = new SqliteTimelineStore(db)) {
+      TimelineService service = new TimelineService(store);
+      StaticWorldState state = service.load(address.node());
+      MapAddressResolver.ResolvedEntity resolved = MapAddressResolver.resolve(state.map(), address);
+
+      Map<String, Object> report = new LinkedHashMap<>();
+      report.put("address", address.canonical());
+      report.put("node", address.node().toString());
+      report.put("kind", resolved.kind());
+      report.put("stableId", resolved.stableId());
+      report.put("displayName", resolved.displayName());
+      report.put("valueType", resolved.value().getClass().getSimpleName());
+      report.put("detail", detail(resolved));
+      System.out.println(JsonCodec.prettyJson(report));
+      return 0;
+    }
+  }
+
+  private static Map<String, Object> detail(MapAddressResolver.ResolvedEntity resolved) {
+    Map<String, Object> detail = new LinkedHashMap<>();
+    switch (resolved.value()) {
+      case Province province -> {
+        detail.put("provinceKind", province.kind());
+        detail.put("terrain", province.terrain());
+        detail.put("stateId", province.stateId());
+        detail.put("regionId", province.regionId());
+        detail.put("polygonParts", province.shape().parts().size());
+      }
+      case State state -> detail.put("provinceCount", state.provinceIds().size());
+      case StrategicRegion region -> detail.put("provinceCount", region.provinceIds().size());
+      case SupplyHub hub -> {
+        detail.put("provinceId", hub.provinceId());
+        detail.put("level", hub.level());
+      }
+      default -> detail.put("valueClass", resolved.value().getClass().getName());
+    }
+    return detail;
+  }
+
   private static int replay(Map<String, String> options) {
     Path db = requiredDb(options);
     NodeRef ref = parseNode(required(options, "--node"));
@@ -363,6 +411,8 @@ public final class WorldSimCli {
           demo      [--db <path>] [--reset]        完整 genesis/apply/discard/save/fork/replay 演示
           benchmark [--db <path>] [--reset] [--columns N] [--rows N] [--cell-size N]
                                                      生成合成 polygon 世界并测量校验/保存/回放
+          resolve   --db <path> --address <node-address>
+                                                     解析 map/province|state|region|supplyHub 地址
           replay    --db <path> --node <branch-tick> 重放并校验节点
           verify    --db <path>                      逐节点重放校验
           tree      --db <path>                      输出分支/节点树
