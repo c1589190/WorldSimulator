@@ -1,6 +1,6 @@
 # WorldSimulator 文档入口
 
-> **当前阶段**：Magna Europa Reforged 社区地图全量导入完成（2026-11-17；21670 省；253 regions；674 supply；1921 railways；68 tests）
+> **当前阶段**：Magna Europa Reforged 社区地图全量导入完成（2026-11-17；21670 省；253 regions；674 supply；1921 railways；72 tests）
 > **当前状态入口**：[`agents/STATUS.md`](agents/STATUS.md)  
 > **用户设计原稿**：[`superpowers/specs/2026-11-17-worldsim-architecture-design-source.md`](superpowers/specs/2026-11-17-worldsim-architecture-design-source.md)  
 > **文档系统规则**：[`AGENTS.md`](AGENTS.md)

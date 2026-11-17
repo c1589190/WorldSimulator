@@ -162,3 +162,4 @@
 - 使用理由：源内实际包含 253 strategic regions、674 有效 supply nodes、1921 railways、2986 states、21670 used provinces；不是靠自动生成补齐。
 - Mappa Mundi 保留为历史导入证据；不再作为当前交付源。
 - raw 数据只放 gitignored `runtime/imports/MagnaEuropa`；上游无标准 LICENSE，公开分发前必须解决许可。
+- **程序不写死地图名/欧洲范围**：`import-hoi4 --source <dir>` 对任意 HOI4 目录工作，worldId 从 source 目录名派生；地图源选择是数据/使用配置，不是代码常量。

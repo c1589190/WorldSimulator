@@ -47,9 +47,9 @@
 ## 完成结果
 
 - 已从 GitHub 下载 Magna Europa Reforged 固定提交，raw 放 `runtime/imports/MagnaEuropa`（约 123 MB，gitignored）；
-- 全量导入 `21670` 个 used province、`2986` 个 state、`253` 个 region、`65196` 条邻接、`674` 个 supply hub、`1921` 条 railway；
+- 全量导入 `21670` 个 used province、`2986` 个 state、`253` 个 region、`65196` 条邻接、`674` 个 supply hub、`1921` 条 railway、`27504` 个 EntityLink；
 - `rings=22241`、`repairedPolygons=8`、`inferredSeaProvinces=3`、`warnings=1`；
 - `main-0` genesis 保存并 `verifyAll=1` 通过；
 - 地址 `province/1`、`state/1`、`region/1`、`supplyHub/supply-249`、`railway/railway-0001` 均可解析；
-- `mvn clean test` 68 tests 全绿；
+- `mvn clean test` 72 tests 全绿；
 - 详细计时、hash、警告与限制见 Magna 导入报告。

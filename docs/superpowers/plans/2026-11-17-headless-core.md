@@ -42,7 +42,7 @@
 
 - SQLite store 与 TimelineService 已落盘；
 - §8.3 验收判据 10 条均有测试/CLI/文档证据；
-- 当前全套 JUnit 68 tests 全绿；
+- 当前全套 JUnit 72 tests 全绿；
 - CLI demo/replay/verify/tree/import-hoi4 已运行；
 - Magna Europa 全量地图导入并回放通过；
 - 文档检查 `PASS`。

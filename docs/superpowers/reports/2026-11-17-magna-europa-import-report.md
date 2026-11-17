@@ -74,22 +74,23 @@ regions=253
 adjacencies=65196
 supplyHubs=674
 railways=1921
+entityLinks=27504
 rings=22241
 repairedPolygons=8
 inferredSeaProvinces=3
 warnings=1
-stateHash=sha256:bfe635a5cd2a095a755fb62d71460896c1033fa77e2a232cd2b0657fb2719656
+stateHash=sha256:097b73086f835cd63df788a787c09cd32fd165be896b39b158c85c43139371ff
 ```
 
 耗时：
 
 ```text
-import=10439 ms
-genesisSave=8457 ms
-verifyAll=8218 ms
-wall=27.57 s
-max RSS=1,553,508 KB (~1.55 GB, -Xmx8g)
-database=41 MB
+import=10418 ms
+genesisSave=8536 ms
+verifyAll=8275 ms
+wall=27.77 s
+max RSS=1,657,480 KB (~1.66 GB, -Xmx8g)
+database=45 MB
 ```
 
 唯一 warning：
@@ -116,6 +117,7 @@ main-0/map/state/1              -> "Quebec", provinceCount=23
 main-0/map/region/1             -> "Ireland", provinceCount=169
 main-0/map/supplyHub/supply-249 -> supplyHub, level=1
 main-0/map/railway/railway-0001 -> railway, level=3, provinceCount=3
+main-0/map/link/province:1    -> EntityLink, category=province, target=1
 ```
 
 ## 源数据优先
@@ -124,6 +126,7 @@ main-0/map/railway/railway-0001 -> railway, level=3, provinceCount=3
 - 不自动生成 region/hub/railway；
 - 目前只对 `heightmap` 与 `definition` 的 3 个海陆冲突做有 warning 的修复；
 - 位置 localisation 使用 `VICTORY_POINTS_*` 作为省显示名，缺失时用 `Province <id>`，不伪造地名。
+- SupplyHub 的 `capacity/range` 源文件未提供时保持 `null/unknown`，不用 0 或猜测值冒充。
 
 ## 剩余限制
 

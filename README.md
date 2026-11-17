@@ -31,7 +31,7 @@ mvn clean test
 mvn -DskipTests package
 ```
 
-`mvn test` 当前为 68 个测试。
+`mvn test` 当前为 72 个测试。
 
 ## CLI
 
@@ -55,7 +55,7 @@ java -Xmx6g -jar target/worldsim-0.1.0-SNAPSHOT.jar resolve \
   --db runtime/worlds/magna-europa.db --address main-0/map/supplyHub/supply-249
 ```
 
-全量 Magna Europa 实测：`21670` used provinces、`2986` states、`253` regions、`65196` adjacencies、`674` supply hubs、`1921` railways、`8` repaired polygons、`3` heightmap 推断 sea。详见导入报告。
+全量 Magna Europa 实测：`21670` used provinces、`2986` states、`253` regions、`65196` adjacencies、`674` supply hubs、`1921` railways、`27504` EntityLinks、`8` repaired polygons、`3` heightmap 推断 sea。详见导入报告。
 
 ### 核心 demo / benchmark
 
