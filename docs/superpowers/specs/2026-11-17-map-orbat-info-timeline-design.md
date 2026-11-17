@@ -234,6 +234,11 @@ EntityLink
 - **可以抄规范/算法**：省份划分、邻接、州/区域、补给中心、铁路、校验。
 - **不建议抄数据**：Mappa Mundi、Blank Map、MapGen 模板、vanilla HOI4 文件通常没有清晰的开源许可，或者包含游戏衍生资产。
 - **首版不做 HOI4 导出**；因此不需要复制 HOI4 的 BMP/definition.csv/州文件结构。
+- **用户补裁 D-014（2026-11-17）覆盖“不建议抄数据”的工程建议**：必须实际导入可自行下载的 HOI4 社区地图，而不是只做合成世界。落实边界：
+  - 首个导入源为 Mappa Mundi GitHub 版固定提交；raw 资产放 gitignored `runtime/imports/**`，不提交；
+  - 导入的是内部原生 polygon 状态，不恢复 HOI4 mod 导出；
+  - 公开分发 raw 资产/派生世界前仍需解决地图许可；
+  - 合成世界继续保留为测试/benchmark fixture，但不再冒充社区地图交付。
 - **推荐的数据路径**：
   - 用开放地理数据/自研生成器生成自己的 polygon 世界；
   - 参考 EarthToHoI4 的切分/校验算法（代码 MIT，数据许可另计）；

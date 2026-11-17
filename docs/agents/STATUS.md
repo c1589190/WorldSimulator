@@ -1,77 +1,83 @@
 # STATUS.md —— 当前状态
 
-> **更新时间**：2026-11-17 11:37 UTC（19:37 CST）
-> **当前目标**：headless core 硬化 + 静态地图实体 resolver。
-> **当前阶段**：核心硬化与 map resolver 完成，等待用户选择 ORBAT/INFO 层；渲染方案仍待选型。
-> **当前责任区**：`docs/superpowers/plans/2026-11-17-headless-core-hardening.md`（已完成）及 map resolver 实现补充。
+> **更新时间**：2026-11-17 11:54 UTC（19:54 CST）
+> **当前目标**：导入实际下载的 HOI4 社区地图（Mappa Mundi）到原生 polygon 静态状态与 SQLite 时间线。
+> **当前阶段**：Mappa Mundi 全量导入、genesis 保存、回放与地址解析已完成；等待下一层/许可决策。
+> **当前责任区**：`docs/superpowers/plans/2026-11-17-community-map-import.md`（已完成）。
 
 ## 源码基线
 
 - 仓库：`~/WorldSimulator`，单模块 Maven 工程，JDK 21。
 - Git：`main`，跟踪 `origin/main`；远程 `git@github.com:c1589190/WorldSimulator.git`。
-- 已推送硬化基线：`1e2e429 docs: record headless core hardening evidence`。
-- 当前未提交改动：静态地图 `MapAddressResolver`、`resolve` CLI 与对应测试；提交后以 `git log/status` 为准。
+- 已推送基线：`0a43236 docs: record static map resolver contract`。
+- 本轮未提交改动：HOI4 社区地图 BMP importer、polygonizer、`import-hoi4` CLI、fetch 脚本、测试与文档；提交后以 `git log/status` 为准。
 - 运行环境：WSL；人类客户端定位为只读查看器，不做复杂编辑器。
 - 邻仓参考基线：
   - `~/SimulatorMosire` HEAD `7561b23b79d61f4a59a19ff441580523376c489f`；
   - `~/ProjectMosire` 当前工作树；AgentLib 契约以该仓文档为准；
   - DSH `orbat_*` 工作区当前 `sequence=15`，5 份编制文档（上一轮只读侦察）。
 
+## 社区地图数据源
+
+- 来源：**Mappa Mundi - Github Version**
+- 仓库：`https://github.com/hoi4fan1234554321/MappaMundi.git`
+- 固定提交：`c19441897a6dd6c86ce57edc37b6a3e01b3dc48d`（2022-11-07）
+- 下载脚本：`tools/fetch-community-map.sh`
+- 本地 raw：`runtime/imports/MappaMundi`（约 118 MB，gitignored）
+- 导入数据库：`runtime/worlds/mappa-mundi.db`（约 31 MB，gitignored）
+- 许可：上游根目录无标准 LICENSE，仅有 README credits；raw/派生世界暂不提交，公开分发前需确认许可。
+
 ## 当前有效文档
 
-- 用户设计原稿（含第二轮/第三轮逐字裁定）：`docs/superpowers/specs/2026-11-17-worldsim-architecture-design-source.md`
+- 用户设计原稿（含第四轮社区地图补裁）：`docs/superpowers/specs/2026-11-17-worldsim-architecture-design-source.md`
 - 专题设计：`docs/superpowers/specs/2026-11-17-map-orbat-info-timeline-design.md`
-- Headless Core 实现计划：`docs/superpowers/plans/2026-11-17-headless-core.md`
-- Headless Core 硬化计划：`docs/superpowers/plans/2026-11-17-headless-core-hardening.md`
+- Headless Core 实现/硬化计划：`docs/superpowers/plans/2026-11-17-headless-core.md`、`docs/superpowers/plans/2026-11-17-headless-core-hardening.md`
+- 社区地图导入计划：`docs/superpowers/plans/2026-11-17-community-map-import.md`
+- 社区地图导入证据：`docs/superpowers/reports/2026-11-17-mappa-mundi-import-report.md`
 - 硬化证据：`docs/superpowers/reports/2026-11-17-headless-core-hardening-report.md`
 - 渲染方案比较：`docs/superpowers/reports/2026-11-17-renderer-options.md`
-- 邻仓/DSH ORBAT 侦察：`docs/superpowers/reports/2026-11-17-neighbor-projects-recon.md`
 - 设计裁定索引：`docs/superpowers/DESIGN_RULINGS.md`
-- 文档规范：`docs/AGENTS.md`、`docs/superpowers/AGENTS.md`
 - 快速构建/CLI：根 `README.md`
 
 ## 最近验证
 
 | 项目 | 结果 | 证据 |
 |---|---|---|
-| 文档结构检查 | `PASS`（`python3 tools/check-docs.py`，rc=0） | 11 required / 2 specs / 3 reports |
-| 单测 | `PASS`（`mvn clean test`，rc=0） | 60 tests / 0 failure / 0 error |
+| 文档结构检查 | `PASS`（`python3 tools/check-docs.py`，rc=0） | 11 required / 2 specs / 4 reports |
+| 单测 | `PASS`（`mvn clean test`，rc=0） | 65 tests / 0 failure / 0 error |
 | 可运行打包 | `PASS`（`mvn -DskipTests package`，rc=0） | `target/worldsim-0.1.0-SNAPSHOT.jar`（约 16 MB） |
-| 300 省 benchmark | `PASS`（rc=0） | 20×15；565 邻接；validationIssues=0；generate 130 ms / validate 36 ms / genesisSave 139 ms / deltaSave 117 ms / replay 43 ms |
-| 500 省 benchmark | `PASS`（rc=0） | 25×20；955 邻接；validationIssues=0；generate 152 ms / validate 43 ms / genesisSave 178 ms / deltaSave 109 ms / replay 33 ms |
-| 多进程写竞争 | `PASS`（1 test） | 两个真实 JVM 同时写 `main-1`，恰好一个成功，一个失败且无覆盖 |
-| 地图地址 resolver | `PASS`（4 tests + CLI） | `main-2/map/province/east` → `province:east` / `East revised` |
-| CLI verify | `PASS`（rc=0） | `/tmp/worldsim-bench500/bench.db` → `verifiedNodes=2` |
+| 下载脚本 | `PASS`（syntax + local sparse test） | `tools/fetch-community-map.sh` 拉取固定提交所需文件 |
+| Mappa 全量导入 | `PASS`（rc=0） | 20753 used provinces / 18246 states / 1 region / 58255 adjacencies / 25577 rings / 244 repaired / 1 supply hub |
+| Mappa genesis/replay | `PASS`（均 rc=0） | `verifyAll=1`；`main-0` replay 20753 provinces，`validated=true` |
+| 地图地址解析 | `PASS` | `main-0/map/province/3838` → `province:3838`；state/region/supplyHub 也可解析 |
+| Mappa 导入资源 | `PASS`（观测） | `wall≈64.1s`，max RSS≈2.1 GB（`-Xmx8g`），DB≈31 MB |
+| ORBAT/INFO/MCP/WebUI | `NOT_IMPLEMENTED` | 本阶段范围外 |
 | 渲染方案 | 未选型 | `docs/superpowers/reports/2026-11-17-renderer-options.md` |
 
 ## 已实现
 
-### Headless core 基础
+### 社区地图导入
 
-- 严格 `NodeAddress`：`treeXXX-tickXXX[/<type>[/<id>...]]`，空白/空段/`.`/`..`/非法 tick/溢出均拒绝。
-- 原生 polygon 省形 + holes + multi-part；JTS 校验合法性、面积、重叠、显示点、边界、归属与邻接。
-- 有序 `WorldChangeSet`；同一 working copy 多次写入合并成一个增量，保留顺序，后写覆盖同字段。
-- SQLite `timeline_nodes` + `checkpoints`；节点不可覆盖，父节点必须已保存，同分支父节点必须是 head。
-- `TimelineService`：genesis、openNext、openFork、apply、discard、save、load/replay、verifyAll、显式 checkpoint。
-- 回放：最近祖先 checkpoint + delta，逐节点 content hash 自检，最终状态再跑地图校验。
-- fork-only：历史节点 `openNext` 报 `TIMELINE_FORK_REQUIRED`；新分支首节点可任意晚于父 tick。
-- checkpoint 策略：创世、分支首节点、每 N 个节点（默认 N=16，CLI demo N=2）；checkpoint 是派生缓存。
+- `Bmp24Reader`：24-bit 未压缩 BMP，支持 bottom-up/top-down 与行填充。
+- `RasterProvincePolygonizer`：
+  - 从 `provinces.bmp` 的像素色块抽取省边界；
+  - 拼接 ring、去共线点、嵌套识别 shell/hole、支持 multi-part；
+  - 用 JTS `GeometryFixer` 修复 244 个像素交叉省形；
+  - 从像素边界统计邻接和 border length。
+- `Hoi4CommunityMapImporter`：
+  - 解析 `definition.csv`、`history/states`、`map/strategicregions`、`localisation`、`map/supply_nodes.txt`；
+  - 未归属省进入 `unassigned-state`，不伪造成有证据归属；
+  - 全部 raw 资产不进 Git。
+- CLI：`import-hoi4 --source <dir> --db <path> --reset`。
 
-### 本轮硬化
+### 既有 headless core
 
-- SQLite schema `user_version=1`；更高版本拒绝；v0 空库/旧开发库最小迁移；初始化失败关闭连接。
-- 合成 polygon 世界：20×15=300 省、25×20=500 省，州按行、战略区域按行块，自动推导邻接。
-- `benchmark` CLI：记录生成、JTS 校验、genesis 保存、delta 保存、checkpoint+delta 回放耗时。
-- 两个真实 JVM 的 `main-1` 写竞争测试：主键/head 约束下无覆盖。
-
-### 静态地图 resolver
-
-- `MapAddressResolver` 支持 `<node>/map/province|state|region|supplyHub/<id>`。
-- 返回稳定 id（`province:east` 等）、kind、显示名和原始实体；显示名不作为身份。
-- 未知 type / 缺 id / 多余路径段 / 实体不存在分别返回稳定 `AddressException` code。
-- CLI `resolve --db <path> --address <node-address>` 可查询某节点上的地图实体。
-- node 存在性由 `TimelineService.load` 负责；resolver 不解释节点语义。
-- 60 个 JUnit 测试。
+- 严格 `NodeAddress`、原生 polygon 静态图、JTS 校验、order-preserving `WorldChangeSet`。
+- SQLite `timeline_nodes` + `checkpoints`，schema `user_version=1`。
+- `TimelineService`：genesis/openNext/openFork/apply/discard/save/load/replay/verifyAll/checkpoint。
+- fork-only、saved-only、同 working copy 合并、content hash 自检。
+- map entity resolver：`map/province|state|region|supplyHub`。
+- 合成 300/500 省 benchmark 与真实多进程写竞争测试仍保留。
 
 ## 已记录的关键裁定
 
@@ -83,22 +89,24 @@
 - INFO 支持任意地址、短/长文本、自定义 typed payload、多包扩展。
 - 当前只上 GM；DM/决策人后续再做。
 - 不支持 HOI4 导出。
+- **必须实际导入可自行下载的 HOI4 社区地图，不能只做合成 fixture，也不能依赖用户本机 HOI4 安装（D-014）。**
 - 人类客户端主要是查看器；环境 WSL；渲染选型优先跨平台。
 
 ## 未验证 / 风险 / blocker
 
-- benchmark 使用规则矩形，不代表真实不规则 polygon 的 JTS 成本；时间是单机单次观测，不是 SLA。
-- 多进程测试只覆盖同节点竞争；未覆盖长事务、写队列、崩溃恢复、WAL checkpoint 压力和吞吐。
-- `verifyAll` 仍逐节点回放；节点多时成本近 O(n²)，后续需按分支批量校验。
-- schema 只有 v0→v1 初始化路径，尚无正式迁移框架。
-- map resolver 只支持 province/state/region/supplyHub；adjacency/railway/unit/ORBAT/INFO 地址仍未接。
-- ORBAT/INFO 运行时、DM 权限、MCP 工具面、WebUI 未实现。
-- ORBAT 模板/初始编成/运行时实例边界、INFO 多包协议仍需用户裁定/细化。
-- 渲染方案未定；WSL 到 Windows 浏览器 localhost 端口转发需实测。
-- `~/SimulatorMosire` 没有根 LICENSE；只能参考行为，不能默认复制代码。
+- Mappa Mundi 严格来说是 2022 年 HOI4 1.12 时代数据，不是 1.19 同步快照。
+- 该提交 `definition.csv` 的所有行均为 `land`；海省类型语义未体现。
+- 该提交只有 1 个战略区域，覆盖全部 20753 个 used province。
+- 4 个州文件截断/为空；4 个省进入 `unassigned-state`（不伪造归属）。
+- `244` 个省形通过 `GeometryFixer` 修复；需在渲染/空间查询阶段继续检查几何质量。
+- 全量导入内存峰值约 2.1 GB，CLI 应显式 `-Xmx6g` 或更大；导入约 64 秒。
+- 全量导入不在 `mvn test` 中（自动测试使用 4×2 BMP fixture）；需持续做手工 smoke。
+- 上游无标准 LICENSE；当前 raw/派生 DB 只放 gitignored `runtime/`，公开分发需解决许可。
+- 未实现 ORBAT/INFO 运行时、DM 权限、MCP 工具面、WebUI。
+- 渲染方案未定；WSL 到 Windows 浏览器路径需实测。
 
 ## 下一步
 
-1. 与用户确认 ORBAT 模板/初始编成/运行时实例边界和 INFO 多包协议。
-2. 设计并实现 ORBAT/INFO 的 ChangeSet 扩展与地址 resolver；仍保持一个节点一个单位最终态。
-3. 渲染方案仍需用户选择；选 WSL 后端 + Windows 浏览器 WebGL2 后才开始只读 viewer。
+1. 若继续地图层：给导入世界补 provenance/manifest、更多社区地图 fixture、可选 simplification 与几何质量报告。
+2. 若继续业务层：先确认 ORBAT 模板/初始编成/运行时实例边界与 INFO 多包协议，再扩展 ChangeSet。
+3. 渲染器仍待用户选择；推荐 WSL 后端 + Windows 浏览器 WebGL2 只读 viewer。

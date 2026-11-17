@@ -110,3 +110,17 @@
 - 渲染方案必须优先考虑 **跨平台通用性**；
 - 当前未选定 WebGL2/WebGPU、LWJGL+Dear ImGui 或其他方案，等渲染方案报告/用户裁定；
 - 不允许把渲染器选型反向污染 core/timeline/static state。
+
+
+## 8. 社区地图补裁（逐字，2026-11-17）
+
+> 我的要求不是直接照搬HOI4的社区地图吗
+>
+> 你不能自己去下载一个吗，非要从本机找？
+
+解释：
+
+- 用户要求的是**实际社区地图数据**，不是只生成规则矩形 `SyntheticWorld`；后者只是规模测试 fixture。
+- 数据源应可由 Agent/开发环境自行下载，不能依赖用户本机 Steam HOI4 安装。
+- 首个候选源选用 Mappa Mundi GitHub 版（固定提交），但 raw 资产有许可不确定性，因此 raw 数据放 gitignored `runtime/imports/**`，仓库只提交下载脚本/导入器/测试 fixture。
+- “不导出 HOI4 mod”仍然有效；导入社区地图不等于恢复 HOI4 导出。
