@@ -1,14 +1,15 @@
 # STATUS.md —— 当前状态
 
-> **更新时间**：2026-11-17 11:10 UTC
-> **当前目标**：记录用户裁决/设计；实现“静态 polygon 状态 + 时间线储存”最小核心。
-> **当前阶段**：设计已记录，Java 骨架 WIP；渲染方案待选型。
+> **更新时间**：2026-11-17 11:22 UTC
+> **当前目标**：实现 headless core：静态 polygon 状态 + SQLite 时间线 + working copy/save/discard/fork/replay + CLI/测试。
+> **当前阶段**：实现中（责任区：`docs/superpowers/plans/2026-11-17-headless-core.md`）；渲染方案待选型。
 
 ## 源码基线
 
-- 本仓 `~/WorldSimulator` 是单模块 Maven 工程，JDK 21。
+- 本仓 `~/WorldSimulator` 是单模块 Maven 工程，JDK 21；已初始化 Git，`main`，远程 `origin=git@github.com:c1589190/WorldSimulator.git`。
+- 初始提交：`167f7a1 chore: initialize WorldSimulator repository`。
 - 已落盘：`pom.xml`、地址、polygon 地图、静态状态、ChangeSet、TimelineStore 接口。
-- 尚未落盘：SQLite `TimelineStore` 实现、working copy/save/discard/ fork 服务、测试、CLI。
+- 实现中：SQLite `TimelineStore`、TimelineService/working copy、测试、CLI。
 - 运行环境：WSL；人类客户端定位为只读查看器，不做复杂编辑器。
 - 邻仓参考基线：
   - `~/SimulatorMosire` HEAD `7561b23b79d61f4a59a19ff441580523376c489f`；
@@ -58,7 +59,7 @@
 
 ## 下一步
 
-1. 实现 SQLite `TimelineStore` + `TimelineService` 的 genesis / working copy / save / discard / fork / replay。
-2. 写 JUnit：严格地址、polygon 校验、ChangeSet 顺序、discard/save、只有 saved 可 fork、checkpoint replay hash。
-3. 提供最小 CLI：初始化小世界、apply 两个变更、discard 一次、save 一次、fork 一次、回放校验。
-4. 渲染方案先不落代码；等用户看完比较后裁定 Viewer 路线。
+1. 完成 SQLite `TimelineStore` + `TimelineService`。
+2. 写 JUnit 并实际运行 `mvn test`。
+3. 跑最小 CLI demo 与文档检查。
+4. 更新本 STATUS 的实测结果；渲染方案暂不落代码。

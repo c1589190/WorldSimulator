@@ -7,9 +7,19 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
-/** 时间线持久化端口。实现可以是 SQLite，后续也可以是内存/测试替身。 */
+/**
+ * 时间线持久化端口。实现可以是 SQLite，后续也可以是内存/测试替身。
+ *
+ * <p>边界：本端口只持久化已保存节点与派生 checkpoint，不保存 working copy。
+ * 节点一旦写入不可覆盖；分支内新节点必须接在当前 head 之后。
+ */
 public interface TimelineStore extends AutoCloseable {
   void initialize();
+
+  boolean isEmpty();
+
+  /** 全时间线唯一的根节点；首版只允许一个创世节点。 */
+  Optional<TimelineNode> genesis();
 
   Optional<TimelineNode> find(NodeRef ref);
 
@@ -26,9 +36,12 @@ public interface TimelineStore extends AutoCloseable {
 
   /**
    * 原子保存一个节点；如果 checkpointStateJson 非 null，同时写该节点的检查点。
-   * 节点已存在时不得覆盖。
+   * 节点已存在时不得覆盖。父节点必须已保存；同分支父节点必须是 head；节点 tick 必须大于父节点。
    */
   void saveNode(TimelineNode node, String checkpointStateJson);
+
+  /** 为已保存节点生成/覆盖派生 checkpoint。 */
+  void saveCheckpoint(NodeRef ref, String checkpointStateJson);
 
   Optional<String> checkpoint(NodeRef ref);
 

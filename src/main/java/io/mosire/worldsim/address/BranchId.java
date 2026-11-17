@@ -9,11 +9,14 @@ public record BranchId(String value) implements Comparable<BranchId> {
     if (value.isBlank()) {
       throw new IllegalArgumentException("BranchId.value 不得为空白");
     }
-    if (value.chars().anyMatch(Character::isWhitespace)) {
+    if (value.chars().anyMatch(NodeAddress::isAddressWhitespace)) {
       throw new IllegalArgumentException("BranchId.value 不得含空白: " + value);
     }
     if (value.indexOf(':') >= 0) {
       throw new IllegalArgumentException("BranchId.value 不得含 ':'（旧 namespace 地址不是节点分支）: " + value);
+    }
+    if (value.indexOf('/') >= 0 || value.indexOf('\\') >= 0) {
+      throw new IllegalArgumentException("BranchId.value 不得含 '/' 或 '\\'（分支名必须能作为地址首段）: " + value);
     }
   }
 

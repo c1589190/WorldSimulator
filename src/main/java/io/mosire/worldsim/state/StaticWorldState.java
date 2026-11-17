@@ -18,8 +18,16 @@ public record StaticWorldState(String id, WorldMap map) {
     return new StaticWorldState(id, next);
   }
 
+  public String canonicalJson() {
+    return JsonCodec.canonicalJson(this);
+  }
+
+  public static StaticWorldState fromJson(String json) {
+    return JsonCodec.fromJson(json, StaticWorldState.class);
+  }
+
   /** 内容哈希由规范 JSON 派生；同一内容应得到同一 hash。 */
   public String contentHash() {
-    return JsonCodec.sha256(JsonCodec.canonicalJson(this));
+    return JsonCodec.sha256(canonicalJson());
   }
 }

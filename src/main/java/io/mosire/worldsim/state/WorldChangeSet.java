@@ -1,5 +1,6 @@
 package io.mosire.worldsim.state;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.mosire.worldsim.json.JsonCodec;
 import io.mosire.worldsim.map.Adjacency;
 import io.mosire.worldsim.map.Province;
@@ -34,12 +35,22 @@ public record WorldChangeSet(List<WorldChange> changes) {
     return new WorldChangeSet(next);
   }
 
+  @JsonIgnore
   public boolean isEmpty() {
     return changes.isEmpty();
   }
 
   public String canonicalJson() {
     return JsonCodec.canonicalJson(this);
+  }
+
+  public static WorldChangeSet fromJson(String json) {
+    return JsonCodec.fromJson(json, WorldChangeSet.class);
+  }
+
+  /** 空变更集的规范 JSON 固定为 {@code {"changes":[]}}。 */
+  public static String emptyJson() {
+    return empty().canonicalJson();
   }
 
   public StaticWorldState apply(StaticWorldState base) {

@@ -30,6 +30,9 @@ public record NodeAddress(NodeRef node, List<String> path) {
       if (segment == null || segment.isBlank()) {
         throw new AddressException("ADDRESS_SEGMENT_BLANK", "节点地址的路径段不得为空白: " + path);
       }
+      if (segment.chars().anyMatch(NodeAddress::isAddressWhitespace)) {
+        throw new AddressException("ADDRESS_SEGMENT_WHITESPACE", "节点地址的路径段不得含空白: " + segment);
+      }
       if (segment.indexOf('/') >= 0 || segment.indexOf('\\') >= 0) {
         throw new AddressException("ADDRESS_SEGMENT_SLASH", "节点地址的路径段不得含 '/' 或 '\\\\': " + segment);
       }
@@ -43,8 +46,11 @@ public record NodeAddress(NodeRef node, List<String> path) {
     if (text == null || text.isBlank()) {
       throw new AddressException("ADDRESS_EMPTY", "节点地址不得为空");
     }
-    String value = text.strip();
-    if (value.chars().anyMatch(Character::isWhitespace)) {
+    if (!text.equals(text.strip())) {
+      throw new AddressException("ADDRESS_WHITESPACE", "节点地址首尾不得含空白: `" + text + "`");
+    }
+    String value = text;
+    if (value.chars().anyMatch(NodeAddress::isAddressWhitespace)) {
       throw new AddressException("ADDRESS_WHITESPACE", "节点地址不得含空白: " + value);
     }
     if (value.length() > MAX_LENGTH) {
@@ -64,19 +70,16 @@ public record NodeAddress(NodeRef node, List<String> path) {
   }
 
   public static boolean looksLikeNodeAddress(String text) {
-    if (text == null || text.isBlank()) {
+    try {
+      parse(text);
+      return true;
+    } catch (RuntimeException e) {
       return false;
     }
-    String first = text.strip().split("/", 2)[0];
-    int dash = first.lastIndexOf('-');
-    if (dash <= 0 || dash == first.length() - 1) {
-      return false;
-    }
-    String branch = first.substring(0, dash);
-    String tick = first.substring(dash + 1);
-    return !branch.isBlank()
-        && branch.indexOf(':') < 0
-        && tick.chars().allMatch(Character::isDigit);
+  }
+
+  static boolean isAddressWhitespace(int codePoint) {
+    return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
   }
 
   private static NodeRef parseNode(String segment, String whole) {
@@ -92,6 +95,10 @@ public record NodeAddress(NodeRef node, List<String> path) {
       throw new AddressException(
           "ADDRESS_BRANCH",
           "节点地址的分支名不得为空白或含 ':'（旧 namespace 地址不是节点地址）: `" + whole + "`");
+    }
+    if (branch.chars().anyMatch(NodeAddress::isAddressWhitespace)
+        || branch.indexOf('/') >= 0 || branch.indexOf('\\') >= 0) {
+      throw new AddressException("ADDRESS_BRANCH", "节点地址的分支名含非法字符: `" + branch + "`");
     }
     if (!tickText.chars().allMatch(Character::isDigit)) {
       throw new AddressException(
