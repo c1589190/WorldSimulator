@@ -40,6 +40,23 @@ Mappa Mundi 仓库根目录没有标准 LICENSE；README 提供 credits。当前
 4. **像素交叉/自交**：`RasterProvincePolygonizer` 使用 `GeometryFixer` 修复 `171` 个省形；用共享像素边界保证正常相邻省 boundary 精确重合。
 5. **raw 数据依赖本机**：改成 `tools/fetch-community-map.sh` 自行从 GitHub sparse clone。
 
+## 源数据审计（回答“HOI4 地图原本不就有吗”）
+
+原版 HOI4 地图确实有完整的 strategic region / supply node / railway 文件；但 Mappa Mundi 这个 GitHub 地图工具源把它们裁剪成了占位数据：
+
+```text
+map/strategicregions/      1 个文件，1 个 strategic_region block，id=1，覆盖 21100 个省
+map/supply_nodes.txt       4 bytes，仅 "1 1 "，即唯一节点指向 province 1
+map/railways.txt           5 bytes，仅 "1 1 1"
+```
+
+这不是解析器漏读。导入器按“源数据优先”处理：
+
+- 单 region 原样导入；
+- province 1 在 heightmap 中是水面，supply node 被拒绝并 warning；
+- railways 文件目前未建模，也没有可用源数据；
+- 不自动生成 region/hub/railway 来填补源缺口。
+
 ## 实现
 
 - `Bmp24Reader`：读取 24-bit 未压缩 BMP，处理 bottom-up/top-down 行序与 4 字节行填充。
@@ -126,6 +143,7 @@ main-0/map/region/1      -> region:1
 - 上游当前只定义 **1 个 strategic region**，覆盖全部省份；导入器如实保留，不按几何自行编造区域。
 - `supply_nodes.txt` 的唯一节点指向水面省；当前导入 0 个有效 supply hub，并给出 warning。
 - 当前海陆修复按 heightmap 水位推断，未区分 sea/lake；后续可加水体连通性/包围判定。
+- strategic region/supply/railway 缺失时**不自动生成**；需要先找含完整数据的社區地图源或由用户明确授权生成。
 - 171 个省形由 `GeometryFixer` 修复；渲染/空间查询阶段仍需做几何质量检查。
 - 全量导入约 1 分 44 秒、峰值约 1.63 GB；未放入 `mvn test`，自动测试使用小 BMP fixture。
 - 上游无标准 LICENSE；raw/派生 DB 只放 gitignored `runtime/`，公开分发前需解决许可。

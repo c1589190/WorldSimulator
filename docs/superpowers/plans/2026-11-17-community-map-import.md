@@ -16,7 +16,7 @@
 把真正下载的 HOI4 社区地图导入后端的原生 polygon 状态：
 
 1. 选定 **Mappa Mundi - Github Version** 作为首个社区地图数据源；
-2. 从下载目录读取 `map/provinces.bmp`、`map/definition.csv`、`history/states`、`map/strategicregions`、`localisation`、`map/supply_nodes.txt`；
+2. 从下载目录读取 `map/provinces.bmp`、`map/definition.csv`、`map/heightmap.bmp`、`history/states`、`map/strategicregions`、`localisation`、`map/supply_nodes.txt`；
 3. 把 BMP 像素省域转换成多边形 ring（支持 holes/multi-part）；
 4. 构建 province/state/region/supply hub/adjacency；
 5. 写 SQLite genesis 并回放校验；
@@ -32,6 +32,7 @@
 - 该仓库根目录**没有标准 LICENSE**；README 只有 credits。当前只做本地导入验证，不把 raw 资产提交进本仓。
 - 若未来公开分发导入结果，必须重新确认地图/州数据许可，或替换成明确开放许可的数据源。
 - 不读取用户本机 Steam HOI4 安装；数据由 `tools/fetch-community-map.sh` 下载到 runtime。
+- **不自动生成** strategic region / supply hub / railway：源文件有就导入，没有就 warning/换源/等用户授权。
 
 ## 验收
 

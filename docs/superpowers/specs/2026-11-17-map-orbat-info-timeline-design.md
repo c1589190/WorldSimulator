@@ -237,6 +237,7 @@ EntityLink
 - **用户补裁 D-014（2026-11-17）覆盖“不建议抄数据”的工程建议**：必须实际导入可自行下载的 HOI4 社区地图，而不是只做合成世界。落实边界：
   - 首个导入源为 `N0zza/MappaMundi` 固定提交 `7a7afbf0`；raw 资产放 gitignored `runtime/imports/**`，不提交；
   - 导入器可以用 heightmap 做有 warning/stats 的海陆修复，也可容错解析畸形 state 文本；不得伪造州/区域归属；
+  - strategic region / supply hub / railway 必须先读源文件；源文件缺失时不得默认自动生成，需记录、换源或等用户授权；
   - 导入的是内部原生 polygon 状态，不恢复 HOI4 mod 导出；
   - 公开分发 raw 资产/派生世界前仍需解决地图许可；
   - 合成世界继续保留为测试/benchmark fixture，但不再冒充社区地图交付。

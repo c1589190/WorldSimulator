@@ -2,7 +2,7 @@
 
 > **更新时间**：2026-11-17 12:10 UTC（20:10 CST）
 > **当前目标**：修复并重跑实际 HOI4 社区地图（Mappa Mundi）导入。
-> **当前阶段**：Mappa Mundi 全量导入、海陆修复、state 容错、genesis 保存、回放与地址解析已完成；等待下一层/许可决策。
+> **当前阶段**：Mappa Mundi 全量导入与修复完成；源数据缺少完整 region/supply/railway，不自动生成；等待换源/补源或下一层决策。
 > **当前责任区**：`docs/superpowers/plans/2026-11-17-community-map-import.md`（已完成）。
 
 ## 源码基线
@@ -93,8 +93,9 @@
 
 ## 未验证 / 风险 / blocker
 
-- 上游 Mappa Mundi 当前只有 1 个 strategic region，覆盖全部省份；导入器不按几何自行编造区域。
-- 唯一 `supply_nodes` 指向水面省（province 1 / Dead Sea），当前没有有效 supply hub；需等上游数据修复或另定补给来源。
+- 上游 Mappa Mundi 当前只有 1 个 strategic region，覆盖全部省份；`supply_nodes.txt` 仅 `1 1`，`railways.txt` 仅 `1 1 1`。原版 HOI4 有完整数据，但该社区源是裁剪/占位版本。
+- 源文件缺失的 region/supply/railway **不自动生成**；需要换含完整数据的社区地图源，或由用户明确授权生成并标 `generated=true`。
+- 唯一 supply node 指向水面省（province 1 / Dead Sea），当前没有有效 supply hub；不伪造陆上节点。
 - 海陆修复按 heightmap 水位多数推断，未区分 sea/lake；水体连通性/包围语义尚未实现。
 - `171` 个省形由 `GeometryFixer` 修复，渲染/空间查询阶段仍需做几何质量检查。
 - 全量导入约 1 分 44 秒、峰值约 1.63 GB；未放入 `mvn test`，自动测试使用小 BMP fixture。
@@ -105,6 +106,6 @@
 
 ## 下一步
 
-1. 若继续地图层：补 strategic region 生成/导入策略、补给网络 schema、sea/lake 细分与几何质量报告。
+1. 若继续地图层：先审计/换一个包含完整 `map/strategicregions`、`map/supply_nodes.txt`、`map/railways.txt` 的社区地图源；不再默认自动生成。
 2. 若继续业务层：确认 ORBAT 模板/初始编成/运行时实例边界与 INFO 多包协议，再扩展 ChangeSet。
 3. 渲染器仍待用户选择；推荐 WSL 后端 + Windows 浏览器 WebGL2 只读 viewer。

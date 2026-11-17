@@ -129,3 +129,20 @@
 - 上游仍只有 1 个 strategic region，且唯一 supply node 指向水面省；当前如实保留/拒绝，不凭空编造。
 - raw 资产有许可不确定性，因此 raw 数据放 gitignored `runtime/imports/**`，仓库只提交下载脚本/导入器/测试 fixture。
 - “不导出 HOI4 mod”仍然有效；导入社区地图不等于恢复 HOI4 导出。
+
+## 9. 源数据优先补裁（逐字，2026-11-17）
+
+> 为什么要自动生成，这些数据HOI4地图原本不就有吗
+
+解释：
+
+- 用户要求优先导入社区地图/ HOI4 源文件里已有的数据，不应默认用自动生成结果替代。
+- Mappa Mundi 当前 GitHub 数据经审计后确实只有：
+  - `map/strategicregions`：1 个文件、1 个 `strategic_region` block；
+  - `map/supply_nodes.txt`：仅 `1 1` 一个节点；
+  - `map/railways.txt`：仅 `1 1 1`；
+- 因此后续策略改为：
+  1. 先完整解析源文件中的 strategic region / supply node / railway；
+  2. 源文件缺失时不自动编造，记录 warning / 换数据源 / 等用户裁定；
+  3. 如果用户明确要求生成，生成结果必须标 `generated=true` 和生成规则，且不能伪装成源地图事实。
+- 这不改变“不导出 HOI4 mod”的裁定。
