@@ -25,8 +25,10 @@
 
 ## 数据源与边界
 
-- 首选仓库：`https://github.com/hoi4fan1234554321/MappaMundi.git`
-- 固定提交：`c19441897a6dd6c86ce57edc37b6a3e01b3dc48d`
+- 首选仓库：`https://github.com/N0zza/MappaMundi.git`
+- 固定提交：`7a7afbf04ef64b715ff1ebf95380f73a7d02b21a`（2026-06-27）
+- 海陆修复：读取 `map/heightmap.bmp`；definition 全 `land` 时按像素 water 多数推断 sea
+- state 容错：接受缺失 `=`、提前闭括号、截断 block，保留其中已写出的 province 列表
 - 该仓库根目录**没有标准 LICENSE**；README 只有 credits。当前只做本地导入验证，不把 raw 资产提交进本仓。
 - 若未来公开分发导入结果，必须重新确认地图/州数据许可，或替换成明确开放许可的数据源。
 - 不读取用户本机 Steam HOI4 安装；数据由 `tools/fetch-community-map.sh` 下载到 runtime。
@@ -41,10 +43,11 @@
 
 ## 完成结果
 
-- 已从 GitHub 下载 Mappa Mundi 固定提交，raw 放 `runtime/imports/MappaMundi`（118 MB，gitignored）；
-- 全量导入 `20753` 个 used province、`18246` 个 state、`1` 个 region、`58255` 条邻接、`1` 个 supply hub；
-- `rings=25577`、`repairedPolygons=244`、`warnings=5`；
+- 已从 GitHub 下载 Mappa Mundi 固定提交，raw 放 `runtime/imports/MappaMundi`（141 MB，gitignored）；
+- 全量导入 `21100` 个 used province、`20707` 个 state、`1` 个 region、`58728` 条邻接、`0` 个有效 supply hub；
+- `rings=25965`、`repairedPolygons=171`、`inferredSeaProvinces=374`、`warnings=2`；
+- state 解析修复了空/截断/缺 `=`/提前闭括号文件，未归属 state 为 0；
 - `main-0` genesis 保存并 `verifyAll=1` 通过；
-- 地址 `main-0/map/province/3838`、`state/1`、`region/1`、`supplyHub/supply-101` 均可解析；
-- `mvn clean test` 65 tests 全绿（含 importer/polygonizer/CLI fixture 测试）；
+- 地址 `main-0/map/province/3838`、`state/13286`、`region/1` 均可解析；
+- `mvn clean test` 67 tests 全绿（含 importer/polygonizer/CLI fixture 测试）；
 - 详细计时、hash、警告与限制见导入报告。

@@ -117,10 +117,15 @@
 > 我的要求不是直接照搬HOI4的社区地图吗
 >
 > 你不能自己去下载一个吗，非要从本机找？
+>
+> 有办法修复吗？
 
 解释：
 
 - 用户要求的是**实际社区地图数据**，不是只生成规则矩形 `SyntheticWorld`；后者只是规模测试 fixture。
 - 数据源应可由 Agent/开发环境自行下载，不能依赖用户本机 Steam HOI4 安装。
-- 首个候选源选用 Mappa Mundi GitHub 版（固定提交），但 raw 资产有许可不确定性，因此 raw 数据放 gitignored `runtime/imports/**`，仓库只提交下载脚本/导入器/测试 fixture。
+- 首个导入源使用 `https://github.com/N0zza/MappaMundi.git` 固定提交 `7a7afbf04ef64b715ff1ebf95380f73a7d02b21a`（2026-06-27）。
+- 导入器允许做**有证据的格式修复**：用 heightmap 修复 definition 的海陆类型、容错解析畸形 state 文本、修复像素交叉 geometry；修复必须写 warning/stats，不能静默伪造归属。
+- 上游仍只有 1 个 strategic region，且唯一 supply node 指向水面省；当前如实保留/拒绝，不凭空编造。
+- raw 资产有许可不确定性，因此 raw 数据放 gitignored `runtime/imports/**`，仓库只提交下载脚本/导入器/测试 fixture。
 - “不导出 HOI4 mod”仍然有效；导入社区地图不等于恢复 HOI4 导出。

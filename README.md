@@ -17,6 +17,7 @@ Agent 导向的世界模拟器/编辑器。当前实现的是 **headless core**�
 - 合成 300/500 省 benchmark；两个真实 JVM 的写竞争测试；
 - 静态地图实体 resolver：`map/province|state|region|supplyHub`；
 - **Mappa Mundi 社区地图导入器**：BMP 省色块 → 原生 polygon/ring/hole/multi-part，州/区域/补给中心/邻接；
+- 海陆类型用 `heightmap.bmp` 修复（definition 全 `land` 的源数据）；容错解析截断/畸形 state 文件；
 - 最小 CLI 与 JUnit 测试。
 
 尚未实现：ORBAT、INFO、DM/决策人权限、MCP 工具面、WebUI。人类客户端定位为只读查看器。
@@ -30,7 +31,7 @@ mvn clean test
 mvn -DskipTests package
 ```
 
-`mvn test` 当前为 65 个测试。
+`mvn test` 当前为 67 个测试。
 
 ## CLI
 
@@ -52,7 +53,7 @@ java -Xmx6g -jar target/worldsim-0.1.0-SNAPSHOT.jar resolve \
   --db runtime/worlds/mappa-mundi.db --address main-0/map/province/3838
 ```
 
-全量 Mappa Mundi 实测：`20753` used provinces、`18246` states、`1` region、`58255` adjacencies、`25577` rings、`244` repaired polygons、`1` supply hub。详见导入报告。
+全量 Mappa Mundi 实测：`21100` used provinces、`20707` states、`1` region、`58728` adjacencies、`25965` rings、`374` heightmap 推断 sea、`171` repaired polygons、`0` valid supply hubs。详见导入报告。
 
 ### 核心 demo / benchmark
 

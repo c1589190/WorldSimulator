@@ -1,6 +1,6 @@
 # WorldSimulator 文档入口
 
-> **当前阶段**：Mappa Mundi 社区地图全量导入完成（2026-11-17；20753 省；65 tests；静态 polygon 时间线可回放）
+> **当前阶段**：Mappa Mundi 社区地图全量导入完成（2026-11-17；21100 省；67 tests；heightmap 海陆修复；静态 polygon 时间线可回放）
 > **当前状态入口**：[`agents/STATUS.md`](agents/STATUS.md)  
 > **用户设计原稿**：[`superpowers/specs/2026-11-17-worldsim-architecture-design-source.md`](superpowers/specs/2026-11-17-worldsim-architecture-design-source.md)  
 > **文档系统规则**：[`AGENTS.md`](AGENTS.md)
