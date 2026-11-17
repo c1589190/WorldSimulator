@@ -10,7 +10,7 @@ import java.util.Objects;
  * 静态地图地址解析：{@code <node>/map/{type}/{id}}。
  *
  * <p>地址是定位方式，稳定 id 是身份。本类只解析 map 模块实体；未知类型/不存在实体返回稳定错误码。
- * 支持：province、state、region、supplyHub、railway。
+ * 支持：province、state、region、supplyHub、railway、link。
  */
 public final class MapAddressResolver {
   private MapAddressResolver() {}
@@ -68,6 +68,14 @@ public final class MapAddressResolver {
           throw notFound("railway", id, address);
         }
         yield new ResolvedEntity("railway", "railway:" + id, id, value);
+      }
+      case "link" -> {
+        String key = requireSingleId(path, address);
+        EntityLink value = map.entityLinks().get(key);
+        if (value == null) {
+          throw notFound("link", key, address);
+        }
+        yield new ResolvedEntity("link", "link:" + key, key, value);
       }
       default -> throw new AddressException("MAP_ENTITY_UNKNOWN_TYPE",
           "未知地图实体类型 `" + type + "`: " + address.canonical());

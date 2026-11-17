@@ -49,7 +49,7 @@ class WorldSimCliTest {
   @Test
   void importHoi4CommandWritesReplayableCommunityMapGenesis(@TempDir Path tempDir) throws Exception {
     Path source = Hoi4FixtureFiles.write(tempDir.resolve("community-map"));
-    Path db = tempDir.resolve("mappa.db");
+    Path db = tempDir.resolve("community.db");
     CliResult result = capture(() -> WorldSimCli.run(new String[]{
         "import-hoi4", "--source", source.toString(), "--db", db.toString(), "--reset"}));
 

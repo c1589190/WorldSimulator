@@ -3,6 +3,7 @@ package io.mosire.worldsim.state;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.mosire.worldsim.json.JsonCodec;
 import io.mosire.worldsim.map.Adjacency;
+import io.mosire.worldsim.map.EntityLink;
 import io.mosire.worldsim.map.Province;
 import io.mosire.worldsim.map.Railway;
 import io.mosire.worldsim.map.State;
@@ -61,6 +62,7 @@ public record WorldChangeSet(List<WorldChange> changes) {
     Map<String, StrategicRegion> regions = new LinkedHashMap<>(base.map().strategicRegions());
     Map<String, SupplyHub> hubs = new LinkedHashMap<>(base.map().supplyHubs());
     Map<String, Railway> railways = new LinkedHashMap<>(base.map().railways());
+    Map<String, EntityLink> entityLinks = new LinkedHashMap<>(base.map().entityLinks());
     List<Adjacency> adjacencies = new ArrayList<>(base.map().adjacencies());
 
     for (WorldChange change : changes) {
@@ -82,13 +84,25 @@ public record WorldChangeSet(List<WorldChange> changes) {
                   region.provinceIds().stream().filter(id -> !id.equals(op.provinceId())).toList()));
             }
           }
-          hubs.entrySet().removeIf(entry -> entry.getValue().provinceId().equals(op.provinceId()));
-          railways.entrySet().removeIf(entry -> entry.getValue().provincePath().contains(op.provinceId()));
+          List<String> removedHubIds = hubs.entrySet().stream()
+              .filter(entry -> entry.getValue().provinceId().equals(op.provinceId()))
+              .map(Map.Entry::getKey)
+              .toList();
+          List<String> removedRailwayIds = railways.entrySet().stream()
+              .filter(entry -> entry.getValue().provincePath().contains(op.provinceId()))
+              .map(Map.Entry::getKey)
+              .toList();
+          removedHubIds.forEach(id -> hubs.remove(id));
+          removedRailwayIds.forEach(id -> railways.remove(id));
+          removeLinksTargeting(entityLinks, "province", op.provinceId());
+          removedHubIds.forEach(id -> removeLinksTargeting(entityLinks, "supplyHub", id));
+          removedRailwayIds.forEach(id -> removeLinksTargeting(entityLinks, "railway", id));
           adjacencies.removeIf(adj -> adj.a().equals(op.provinceId()) || adj.b().equals(op.provinceId()));
         }
         case WorldChange.PutState op -> states.put(op.state().id(), op.state());
         case WorldChange.RemoveState op -> {
           states.remove(op.stateId());
+          removeLinksTargeting(entityLinks, "state", op.stateId());
           for (Map.Entry<String, Province> entry : provinces.entrySet()) {
             Province province = entry.getValue();
             if (op.stateId().equals(province.stateId())) {
@@ -100,6 +114,7 @@ public record WorldChangeSet(List<WorldChange> changes) {
         case WorldChange.PutStrategicRegion op -> regions.put(op.region().id(), op.region());
         case WorldChange.RemoveStrategicRegion op -> {
           regions.remove(op.regionId());
+          removeLinksTargeting(entityLinks, "region", op.regionId());
           for (Map.Entry<String, Province> entry : provinces.entrySet()) {
             Province province = entry.getValue();
             if (op.regionId().equals(province.regionId())) {
@@ -109,9 +124,17 @@ public record WorldChangeSet(List<WorldChange> changes) {
           }
         }
         case WorldChange.PutSupplyHub op -> hubs.put(op.supplyHub().id(), op.supplyHub());
-        case WorldChange.RemoveSupplyHub op -> hubs.remove(op.supplyHubId());
+        case WorldChange.RemoveSupplyHub op -> {
+          hubs.remove(op.supplyHubId());
+          removeLinksTargeting(entityLinks, "supplyHub", op.supplyHubId());
+        }
         case WorldChange.PutRailway op -> railways.put(op.railway().id(), op.railway());
-        case WorldChange.RemoveRailway op -> railways.remove(op.railwayId());
+        case WorldChange.RemoveRailway op -> {
+          railways.remove(op.railwayId());
+          removeLinksTargeting(entityLinks, "railway", op.railwayId());
+        }
+        case WorldChange.PutEntityLink op -> entityLinks.put(op.entityLink().key(), op.entityLink());
+        case WorldChange.RemoveEntityLink op -> entityLinks.remove(op.key());
         case WorldChange.ReplaceAdjacencies op -> {
           adjacencies.clear();
           adjacencies.addAll(op.adjacencies());
@@ -119,7 +142,12 @@ public record WorldChangeSet(List<WorldChange> changes) {
       }
     }
     WorldMap next = new WorldMap(base.map().id(), base.map().name(), base.map().width(), base.map().height(),
-        provinces, states, regions, hubs, railways, adjacencies);
+        provinces, states, regions, hubs, railways, entityLinks, adjacencies);
     return base.withMap(next);
+  }
+
+  private static void removeLinksTargeting(Map<String, EntityLink> links, String category, String targetId) {
+    links.entrySet().removeIf(entry -> entry.getValue().category().equals(category)
+        && entry.getValue().targetId().equals(targetId));
   }
 }

@@ -27,6 +27,7 @@ public record WorldMap(
     Map<String, StrategicRegion> strategicRegions,
     Map<String, SupplyHub> supplyHubs,
     Map<String, Railway> railways,
+    Map<String, EntityLink> entityLinks,
     List<Adjacency> adjacencies) {
 
   public WorldMap {
@@ -44,6 +45,7 @@ public record WorldMap(
     strategicRegions = sortedById(strategicRegions, "strategicRegions");
     supplyHubs = sortedById(supplyHubs, "supplyHubs");
     railways = sortedById(railways, "railways");
+    entityLinks = sortedById(entityLinks, "entityLinks");
 
     List<Adjacency> normalized = new ArrayList<>(Objects.requireNonNull(adjacencies, "adjacencies"));
     for (Adjacency adjacency : normalized) {
@@ -85,6 +87,7 @@ public record WorldMap(
     private final Map<String, StrategicRegion> regions = new LinkedHashMap<>();
     private final Map<String, SupplyHub> supplyHubs = new LinkedHashMap<>();
     private final Map<String, Railway> railways = new LinkedHashMap<>();
+    private final Map<String, EntityLink> entityLinks = new LinkedHashMap<>();
     private final List<Adjacency> adjacencies = new ArrayList<>();
 
     private Builder(String id, String name, double width, double height) {
@@ -123,6 +126,16 @@ public record WorldMap(
       return railway(new Railway(id, level, provincePath));
     }
 
+    public Builder entityLink(EntityLink value) {
+      entityLinks.put(value.key(), value);
+      return this;
+    }
+
+    public Builder entityLink(String key, String category, String targetId, Vec2 displayPoint,
+        List<String> tags) {
+      return entityLink(new EntityLink(key, category, targetId, displayPoint, tags));
+    }
+
     public Builder adjacency(Adjacency value) {
       adjacencies.add(value);
       return this;
@@ -141,7 +154,8 @@ public record WorldMap(
     }
 
     public WorldMap build() {
-      return new WorldMap(id, name, width, height, provinces, states, regions, supplyHubs, railways, adjacencies);
+      return new WorldMap(id, name, width, height, provinces, states, regions, supplyHubs, railways,
+          entityLinks, adjacencies);
     }
   }
 }

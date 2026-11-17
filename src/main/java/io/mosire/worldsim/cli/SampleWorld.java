@@ -34,7 +34,12 @@ public final class SampleWorld {
         .state(new State(STATE, "Heartland", List.of(WEST, EAST)))
         .strategicRegion(new StrategicRegion(REGION, "Core", List.of(WEST, EAST)))
         .supplyHub(new SupplyHub("depot-west", WEST, 3))
-        .railway("rail-main", 1, List.of(WEST, EAST));
+        .railway("rail-main", 1, List.of(WEST, EAST))
+        .entityLink("province:west", "province", WEST, new Vec2(50, 50), List.of("demo"))
+        .entityLink("state:heartland", "state", STATE, null, List.of("demo"))
+        .entityLink("region:core", "region", REGION, null, List.of("demo"))
+        .entityLink("supplyHub:depot-west", "supplyHub", "depot-west", new Vec2(50, 50), List.of("demo"))
+        .entityLink("railway:rail-main", "railway", "rail-main", null, List.of("demo"));
     return builder.deriveAdjacencies().build();
   }
 

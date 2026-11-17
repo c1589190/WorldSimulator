@@ -145,7 +145,15 @@ public final class TimelineService {
 
   /** 从分支 head 打开推进用 working copy。历史/非 head 节点只能走 {@link #openFork}。 */
   public TimelineWorkingCopy openNext(NodeRef savedRef) {
+    return openNext(savedRef, null);
+  }
+
+  /**
+   * 带 expectedContentHash 的推进打开：hash 不匹配说明调用方持有过期状态，操作不得开始。
+   */
+  public TimelineWorkingCopy openNext(NodeRef savedRef, String expectedContentHash) {
     TimelineNode base = requireSavedNode(savedRef);
+    requireExpectedContentHash(base, expectedContentHash);
     NodeRef head = store.head(base.ref().branch())
         .orElseThrow(() -> new TimelineException("TIMELINE_STORE_CORRUPT",
             "分支无 head: " + base.ref().branch()));
@@ -159,8 +167,14 @@ public final class TimelineService {
 
   /** 从任意已保存节点 fork 一个尚不存在的新分支。 */
   public TimelineWorkingCopy openFork(NodeRef savedRef, BranchId newBranch) {
+    return openFork(savedRef, newBranch, null);
+  }
+
+  /** 带 expectedContentHash 的 fork 打开。 */
+  public TimelineWorkingCopy openFork(NodeRef savedRef, BranchId newBranch, String expectedContentHash) {
     Objects.requireNonNull(newBranch, "newBranch");
     TimelineNode base = requireSavedNode(savedRef);
+    requireExpectedContentHash(base, expectedContentHash);
     if (newBranch.equals(base.ref().branch())) {
       throw new TimelineException("TIMELINE_FORK_SAME_BRANCH",
           "fork 目标分支必须不同于父分支；同分支推进请用 openNext: " + newBranch);
@@ -198,8 +212,18 @@ public final class TimelineService {
    * 目标 tick 必须大于父节点 tick。
    */
   public TimelineNode save(TimelineWorkingCopy workingCopy, long targetTick, String savedBy) {
+    return save(workingCopy, targetTick, savedBy, null);
+  }
+
+  /**
+   * 带 expectedContentHash 的保存。expected 是调用方打开 working copy 时看到的 base state hash；
+   * 不匹配则零写入，working copy 保持打开。
+   */
+  public TimelineNode save(TimelineWorkingCopy workingCopy, long targetTick, String savedBy,
+      String expectedContentHash) {
     Objects.requireNonNull(workingCopy, "workingCopy");
     requireSavedBy(savedBy);
+    requireExpectedContentHash(workingCopy.baseNode(), expectedContentHash);
     if (!workingCopy.isOpen()) {
       throw new TimelineException("TIMELINE_WORKING_COPY_CLOSED",
           "working copy 已保存或已放弃: base=" + workingCopy.baseNode().ref());
@@ -274,6 +298,21 @@ public final class TimelineService {
       throw new TimelineException("TIMELINE_STATE_INVALID",
           "静态状态校验失败: " + issues.size() + " 个问题；首个: "
               + first.code() + " " + first.message());
+    }
+  }
+
+  private static void requireExpectedContentHash(TimelineNode base, String expectedContentHash) {
+    if (expectedContentHash == null) {
+      return;
+    }
+    if (expectedContentHash.isBlank()) {
+      throw new TimelineException("TIMELINE_EXPECTED_HASH_INVALID",
+          "expectedContentHash 不得为空白: node=" + base.ref());
+    }
+    if (!expectedContentHash.equals(base.stateHash())) {
+      throw new TimelineException("TIMELINE_EXPECTED_HASH_MISMATCH",
+          "expectedContentHash 与已保存节点不一致: node=" + base.ref()
+              + " expected=" + expectedContentHash + " actual=" + base.stateHash());
     }
   }
 

@@ -62,7 +62,7 @@ public final class Hoi4FixtureFiles {
     return root;
   }
 
-  /** 模拟 Mappa 的畸形 state：provinces 写在 state 提前闭合括号之外。 */
+  /** 模拟部分社区地图的畸形 state：provinces 写在 state 提前闭合括号之外。 */
   public static Path writeWithProvincesOutsideStateBlock(Path root) throws IOException {
     write(root);
     Files.writeString(root.resolve("history/states/2-Beta.txt"), """

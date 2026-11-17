@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class WorldMapValidatorTest {
@@ -81,6 +82,46 @@ class WorldMapValidatorTest {
 
     assertIssue(map, "STATE_CONTAINS_SEA");
     assertIssue(map, "SUPPLY_ON_NON_LAND");
+  }
+
+  @Test
+  void detectsStateSpanningStrategicRegions() {
+    WorldMap map = baseMap("state-regions")
+        .province(new Province("a", "A", "land", "plains", ProvinceShape.of(square(0, 0, 80, 80)),
+            new Vec2(40, 40), "s", "r1", List.of()))
+        .province(new Province("b", "B", "land", "plains", ProvinceShape.of(square(100, 0, 180, 80)),
+            new Vec2(140, 40), "s", "r2", List.of()))
+        .state(new State("s", "S", List.of("a", "b")))
+        .strategicRegion(new StrategicRegion("r1", "R1", List.of("a")))
+        .strategicRegion(new StrategicRegion("r2", "R2", List.of("b")))
+        .build();
+
+    assertIssue(map, "STATE_SPANS_REGIONS");
+  }
+
+  @Test
+  void detectsEntityLinkToMissingKnownTarget() {
+    WorldMap map = baseMap("entity-link")
+        .province(province("a", square(0, 0, 100, 100), new Vec2(50, 50)))
+        .state(new State("s", "S", List.of("a")))
+        .strategicRegion(new StrategicRegion("r", "R", List.of("a")))
+        .entityLink("province:missing", "province", "missing", null, List.of())
+        .build();
+
+    assertIssue(map, "ENTITY_LINK_TARGET_MISSING");
+  }
+
+  @Test
+  void supplyHubCapacityAndRangeMayBeUnknownButNotNegative() {
+    SupplyHub unknown = new SupplyHub("h1", "a", 1);
+    assertEquals(null, unknown.capacity());
+    assertEquals(null, unknown.range());
+
+    SupplyHub known = new SupplyHub("h2", "a", 2, 12.5, 300.0);
+    assertEquals(12.5, known.capacity());
+    assertEquals(300.0, known.range());
+    assertThrows(IllegalArgumentException.class, () -> new SupplyHub("h3", "a", 1, -1.0, null));
+    assertThrows(IllegalArgumentException.class, () -> new SupplyHub("h4", "a", 1, null, -1.0));
   }
 
   @Test

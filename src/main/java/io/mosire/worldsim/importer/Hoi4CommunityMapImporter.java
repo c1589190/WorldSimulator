@@ -1,6 +1,7 @@
 package io.mosire.worldsim.importer;
 
 import io.mosire.worldsim.map.Adjacency;
+import io.mosire.worldsim.map.EntityLink;
 import io.mosire.worldsim.map.Province;
 import io.mosire.worldsim.map.Railway;
 import io.mosire.worldsim.map.State;
@@ -33,9 +34,10 @@ import java.util.stream.Stream;
 /**
  * 把 HOI4 社区地图目录编译成 WorldSimulator 的原生 polygon 静态世界。
  *
- * <p>当前适配 Mappa Mundi GitHub 版：
- * {@code map/provinces.bmp + map/definition.csv + history/states + map/strategicregions
- * + localisation + map/supply_nodes.txt}。不读取用户本机 HOI4 安装。
+ * <p>解析任意 HOI4 社区地图/mod 目录：
+ * {@code map/provinces.bmp + map/definition.csv + map/heightmap.bmp + history/states
+ * + map/strategicregions + localisation + map/supply_nodes.txt + map/railways.txt}。
+ * 具体地图名只来自 source 目录，不写死在代码里。
  *
  * <p>raw 资产不进入仓库；调用方应把下载目录放在 gitignored 的 {@code runtime/imports/**}。
  */
@@ -122,6 +124,24 @@ public final class Hoi4CommunityMapImporter {
     if (worldId.isBlank()) {
       worldId = "hoi4-map";
     }
+    final String sourceTag = worldId;
+    Map<String, EntityLink> entityLinks = new LinkedHashMap<>();
+    for (int id : usedProvinceIds) {
+      String provinceId = Integer.toString(id);
+      entityLinks.put("province:" + provinceId, new EntityLink(
+          "province:" + provinceId, "province", provinceId,
+          polygons.displayPoints().get(id), List.of(sourceTag)));
+    }
+    states.values().forEach(state -> entityLinks.put("state:" + state.id(), new EntityLink(
+        "state:" + state.id(), "state", state.id(), null, List.of(sourceTag))));
+    regions.values().forEach(region -> entityLinks.put("region:" + region.id(), new EntityLink(
+        "region:" + region.id(), "region", region.id(), null, List.of(sourceTag))));
+    supplyHubs.values().forEach(hub -> entityLinks.put("supplyHub:" + hub.id(), new EntityLink(
+        "supplyHub:" + hub.id(), "supplyHub", hub.id(),
+        polygons.displayPoints().get(Integer.parseInt(hub.provinceId())), List.of(sourceTag))));
+    railways.values().forEach(railway -> entityLinks.put("railway:" + railway.id(), new EntityLink(
+        "railway:" + railway.id(), "railway", railway.id(), null, List.of(sourceTag))));
+
     WorldMap.Builder map = WorldMap.builder(worldId, sourceName, raster.width(), raster.height());
     for (int id : usedProvinceIds) {
       Definition definition = definitions.byId()[id];
@@ -153,6 +173,7 @@ public final class Hoi4CommunityMapImporter {
     regions.values().forEach(map::strategicRegion);
     supplyHubs.values().forEach(map::supplyHub);
     railways.values().forEach(map::railway);
+    entityLinks.values().forEach(map::entityLink);
 
     List<Adjacency> adjacencies = new ArrayList<>();
     for (Map.Entry<Long, Integer> entry : polygons.borderLengths().entrySet()) {
@@ -185,6 +206,7 @@ public final class Hoi4CommunityMapImporter {
         adjacencies.size(),
         supplyHubs.size(),
         railways.size(),
+        entityLinks.size(),
         polygons.ringsTraced(),
         polygons.repaired(),
         kinds.inferredSeaProvinces(),
@@ -307,7 +329,7 @@ public final class Hoi4CommunityMapImporter {
         continue;
       }
       String hubId = "supply-" + provinceId;
-      hubs.putIfAbsent(hubId, new SupplyHub(hubId, Integer.toString(provinceId), 1));
+      hubs.putIfAbsent(hubId, new SupplyHub(hubId, Integer.toString(provinceId), 1, null, null));
     }
     return hubs;
   }
@@ -714,7 +736,7 @@ public final class Hoi4CommunityMapImporter {
         }
       }
       if (end < 0) {
-        // Mappa Mundi 有少量截断 state 文件；保留已写出的字段/省列表，避免整州丢失。
+        // 部分社区地图有截断 state 文件；保留已写出的字段/省列表，避免整州丢失。
         blocks.add(text.substring(brace + 1));
         break;
       }
@@ -834,6 +856,7 @@ public final class Hoi4CommunityMapImporter {
       int adjacencies,
       int supplyHubs,
       int railways,
+      int entityLinks,
       int rings,
       int repairedPolygons,
       int inferredSeaProvinces,

@@ -234,6 +234,27 @@ class TimelineServiceTest {
   }
 
   @Test
+  void expectedContentHashGuardsOpenForkAndSave() {
+    assertCode("TIMELINE_EXPECTED_HASH_MISMATCH",
+        () -> service.openNext(genesis.ref(), "sha256:wrong"));
+    assertCode("TIMELINE_EXPECTED_HASH_INVALID",
+        () -> service.openNext(genesis.ref(), " "));
+    assertCode("TIMELINE_EXPECTED_HASH_MISMATCH",
+        () -> service.openFork(genesis.ref(), new BranchId("tree2"), "sha256:wrong"));
+
+    TimelineWorkingCopy workingCopy = service.openNext(genesis.ref(), genesis.stateHash());
+    service.apply(workingCopy, rename(initial, SampleWorld.EAST, "Expected hash writer"));
+    assertCode("TIMELINE_EXPECTED_HASH_MISMATCH",
+        () -> service.save(workingCopy, 1, "gm:test", "sha256:wrong"));
+    assertFalse(store.exists(new NodeRef(new BranchId("main"), 1)));
+    assertTrue(workingCopy.isOpen());
+
+    TimelineNode saved = service.save(workingCopy, 1, "gm:test", genesis.stateHash());
+    assertEquals("Expected hash writer",
+        service.load(saved.ref()).map().provinces().get(SampleWorld.EAST).name());
+  }
+
+  @Test
   void tickMustAdvanceAndWorkingCopyCannotBeSavedTwice() {
     TimelineWorkingCopy workingCopy = service.openNext(genesis.ref());
     assertCode("TIMELINE_TICK_NOT_ADVANCING", () -> service.save(workingCopy, 0, "gm:test"));

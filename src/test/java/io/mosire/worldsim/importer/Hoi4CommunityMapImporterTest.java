@@ -32,6 +32,9 @@ class Hoi4CommunityMapImporterTest {
     assertEquals(1, map.supplyHubs().size());
     assertEquals(1, map.railways().size());
     assertEquals("1", map.railways().get("railway-0001").provincePath().get(0));
+    assertEquals(7, map.entityLinks().size());
+    assertEquals("province", map.entityLinks().get("province:1").category());
+    assertEquals("railway", map.entityLinks().get("railway:railway-0001").category());
     assertTrue(WorldMapValidator.validate(map).isEmpty());
 
     var p1 = map.provinces().get("1");
@@ -54,12 +57,14 @@ class Hoi4CommunityMapImporterTest {
         NodeAddress.parse("tree1-0/map/province/1"));
     assertEquals("province:1", resolved.stableId());
 
+    assertEquals("community-map", result.state().id());
     assertEquals(2, result.stats().usedProvinces());
     assertEquals(2, result.stats().states());
     assertEquals(1, result.stats().regions());
     assertEquals(2, result.stats().adjacencies());
     assertEquals(1, result.stats().supplyHubs());
     assertEquals(1, result.stats().railways());
+    assertEquals(7, result.stats().entityLinks());
     assertEquals(0, result.stats().inferredSeaProvinces());
     assertTrue(result.warnings().isEmpty(), () -> result.warnings().toString());
   }

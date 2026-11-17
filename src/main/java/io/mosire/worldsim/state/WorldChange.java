@@ -3,6 +3,7 @@ package io.mosire.worldsim.state;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import io.mosire.worldsim.map.Adjacency;
+import io.mosire.worldsim.map.EntityLink;
 import io.mosire.worldsim.map.Province;
 import io.mosire.worldsim.map.Railway;
 import io.mosire.worldsim.map.State;
@@ -24,6 +25,8 @@ import java.util.List;
     @JsonSubTypes.Type(value = WorldChange.RemoveSupplyHub.class, name = "removeSupplyHub"),
     @JsonSubTypes.Type(value = WorldChange.PutRailway.class, name = "putRailway"),
     @JsonSubTypes.Type(value = WorldChange.RemoveRailway.class, name = "removeRailway"),
+    @JsonSubTypes.Type(value = WorldChange.PutEntityLink.class, name = "putEntityLink"),
+    @JsonSubTypes.Type(value = WorldChange.RemoveEntityLink.class, name = "removeEntityLink"),
     @JsonSubTypes.Type(value = WorldChange.ReplaceAdjacencies.class, name = "replaceAdjacencies")
 })
 public sealed interface WorldChange permits
@@ -37,6 +40,8 @@ public sealed interface WorldChange permits
     WorldChange.RemoveSupplyHub,
     WorldChange.PutRailway,
     WorldChange.RemoveRailway,
+    WorldChange.PutEntityLink,
+    WorldChange.RemoveEntityLink,
     WorldChange.ReplaceAdjacencies {
 
   record PutProvince(Province province) implements WorldChange {}
@@ -58,6 +63,10 @@ public sealed interface WorldChange permits
   record PutRailway(Railway railway) implements WorldChange {}
 
   record RemoveRailway(String railwayId) implements WorldChange {}
+
+  record PutEntityLink(EntityLink entityLink) implements WorldChange {}
+
+  record RemoveEntityLink(String key) implements WorldChange {}
 
   record ReplaceAdjacencies(List<Adjacency> adjacencies) implements WorldChange {
     public ReplaceAdjacencies {

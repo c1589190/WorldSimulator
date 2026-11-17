@@ -1,6 +1,7 @@
 package io.mosire.worldsim.state;
 
 import io.mosire.worldsim.cli.SampleWorld;
+import io.mosire.worldsim.map.EntityLink;
 import io.mosire.worldsim.map.Railway;
 import io.mosire.worldsim.map.WorldMap;
 import io.mosire.worldsim.map.WorldMapValidator;
@@ -56,6 +57,8 @@ class WorldChangeSetTest {
     assertEquals(List.of(SampleWorld.EAST), map.strategicRegions().get(SampleWorld.REGION).provinceIds());
     assertTrue(map.supplyHubs().isEmpty());
     assertTrue(map.railways().isEmpty());
+    assertTrue(map.entityLinks().values().stream()
+        .noneMatch(link -> link.category().equals("province") && link.targetId().equals(SampleWorld.WEST)));
     assertTrue(map.adjacencies().isEmpty());
     assertTrue(WorldMapValidator.validate(map).isEmpty());
   }
@@ -85,12 +88,15 @@ class WorldChangeSetTest {
   }
 
   @Test
-  void railwayChangeAppliesAndRoundTrips() {
+  void railwayAndEntityLinkChangesApplyAndRoundTrip() {
     WorldChangeSet set = WorldChangeSet.empty()
-        .append(new WorldChange.PutRailway(new Railway("rail-north", 2, List.of(SampleWorld.WEST, SampleWorld.EAST))));
+        .append(new WorldChange.PutRailway(new Railway("rail-north", 2, List.of(SampleWorld.WEST, SampleWorld.EAST))))
+        .append(new WorldChange.PutEntityLink(
+            new EntityLink("unit:u-1", "unit", "u-1", null, List.of("test"))));
 
     StaticWorldState result = set.apply(initial);
     assertEquals(2, result.map().railways().get("rail-north").level());
+    assertEquals("unit", result.map().entityLinks().get("unit:u-1").category());
     assertEquals(WorldChangeSet.fromJson(set.canonicalJson()), set);
   }
 

@@ -40,6 +40,7 @@ public final class WorldMapValidator {
       if (!entry.getKey().equals(state.id())) {
         error(issues, "STATE_KEY_ID_MISMATCH", "states key=" + entry.getKey() + " id=" + state.id());
       }
+      Set<String> stateRegions = new HashSet<>();
       for (String provinceId : state.provinceIds()) {
         Province province = map.provinces().get(provinceId);
         if (province == null) {
@@ -53,6 +54,13 @@ public final class WorldMapValidator {
           error(issues, "PROVINCE_STATE_MISMATCH",
               "省 " + provinceId + " stateId=" + province.stateId() + "，但州 " + state.id() + " 列了它");
         }
+        if (province.regionId() != null) {
+          stateRegions.add(province.regionId());
+        }
+      }
+      if (stateRegions.size() > 1) {
+        error(issues, "STATE_SPANS_REGIONS",
+            "州 " + state.id() + " 的省跨越多个战略区域: " + stateRegions);
       }
     }
     for (Province province : map.provinces().values()) {
@@ -114,6 +122,28 @@ public final class WorldMapValidator {
         error(issues, "SUPPLY_PROVINCE_MISSING", "补给中心 " + hub.id() + " 引用不存在的省 " + hub.provinceId());
       } else if (!province.kind().equals("land")) {
         error(issues, "SUPPLY_ON_NON_LAND", "补给中心 " + hub.id() + " 不在陆省: " + province.kind());
+      }
+    }
+
+    // EntityLink：key 与值一致；已知 map category 必须指向存在的实体。
+    for (Map.Entry<String, EntityLink> entry : map.entityLinks().entrySet()) {
+      EntityLink link = entry.getValue();
+      if (!entry.getKey().equals(link.key())) {
+        error(issues, "ENTITY_LINK_KEY_MISMATCH",
+            "entityLinks key=" + entry.getKey() + " key=" + link.key());
+      }
+      boolean targetExists = switch (link.category()) {
+        case "province" -> map.provinces().containsKey(link.targetId());
+        case "state" -> map.states().containsKey(link.targetId());
+        case "region" -> map.strategicRegions().containsKey(link.targetId());
+        case "supplyHub" -> map.supplyHubs().containsKey(link.targetId());
+        case "railway" -> map.railways().containsKey(link.targetId());
+        default -> true;
+      };
+      if (!targetExists) {
+        error(issues, "ENTITY_LINK_TARGET_MISSING",
+            "EntityLink " + link.key() + " category=" + link.category()
+                + " 指向不存在的 target=" + link.targetId());
       }
     }
 
