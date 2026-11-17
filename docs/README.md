@@ -1,6 +1,6 @@
 # WorldSimulator 文档入口
 
-> **当前阶段**：Headless Core 硬化完成（2026-11-17；55 tests；300/500 省 benchmark；多进程写竞争已测）
+> **当前阶段**：Headless Core + 静态地图 resolver（2026-11-17；60 tests；300/500 省 benchmark；多进程写竞争已测）
 > **当前状态入口**：[`agents/STATUS.md`](agents/STATUS.md)  
 > **用户设计原稿**：[`superpowers/specs/2026-11-17-worldsim-architecture-design-source.md`](superpowers/specs/2026-11-17-worldsim-architecture-design-source.md)  
 > **文档系统规则**：[`AGENTS.md`](AGENTS.md)

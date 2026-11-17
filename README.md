@@ -15,6 +15,7 @@ Agent 导向的世界模拟器/编辑器。当前实现的是 **headless core**�
 - 同分支只能从 head 推进；历史节点只能 fork；不做原地改写/rebase；
 - SQLite schema `user_version` 门禁与 v0→v1 最小迁移；
 - 合成 300/500 省 benchmark；两个真实 JVM 的写竞争测试；
+- 静态地图实体 resolver：`map/province|state|region|supplyHub`；
 - 最小 CLI 与 JUnit 测试。
 
 尚未实现：ORBAT、INFO、DM/决策人权限、MCP 工具面、WebUI。人类客户端定位为只读查看器。
@@ -28,7 +29,7 @@ mvn clean test
 mvn -DskipTests package
 ```
 
-`mvn test` 当前为 55 个测试。
+`mvn test` 当前为 60 个测试。
 
 ## CLI
 
@@ -42,6 +43,10 @@ java -jar target/worldsim-0.1.0-SNAPSHOT.jar tree --db runtime/demo.db
 # 合成 300 省（20×15）polygon 世界，测量生成/校验/保存/回放
 java -jar target/worldsim-0.1.0-SNAPSHOT.jar benchmark \
   --db runtime/benchmark.db --reset --columns 20 --rows 15
+
+# 严格地址解析到稳定实体 id
+java -jar target/worldsim-0.1.0-SNAPSHOT.jar resolve \
+  --db runtime/demo.db --address main-2/map/province/east
 
 # 回放某个节点（checkpoint + delta）并校验
 java -jar target/worldsim-0.1.0-SNAPSHOT.jar replay --db runtime/demo.db --node main-2

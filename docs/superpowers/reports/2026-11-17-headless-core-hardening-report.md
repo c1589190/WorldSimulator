@@ -92,7 +92,7 @@ src/test/java/io/mosire/worldsim/timeline/SqliteTimelineStoreMultiProcessTest.ja
 ## 回归
 
 ```text
-mvn clean test           PASS, 55 tests, 0 failures, 0 errors
+mvn clean test           PASS, 60 tests, 0 failures, 0 errors
 mvn -DskipTests package PASS
 python3 tools/check-docs.py PASS
 ```

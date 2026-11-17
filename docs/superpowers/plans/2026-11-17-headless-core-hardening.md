@@ -38,6 +38,6 @@
 
 - 300 省与 500 省 benchmark 均通过，详见报告；
 - 多进程同节点竞争测试通过；
-- `mvn clean test` 55 tests 全绿；
+- `mvn clean test` 60 tests 全绿（含后续静态地图 resolver 测试）；
 - `benchmark`、`verify` CLI 均返回 0；
 - 文档检查 `PASS`。

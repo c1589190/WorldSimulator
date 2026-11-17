@@ -175,6 +175,18 @@ EntityLink
 - `EntityLink` 可用同样 id 定位 polygon/显示坐标，不把“渲染所需顶点”复制进实体记录；
 - 任意地址（包括未来 INFO 的自定义地址）只做严格语法校验，是否存在由 resolver 决定。
 
+**静态地图 resolver 实现补充（2026-11-17）**：
+
+- 当前只落地 map 模块。路径契约：
+  - `treeXXX-tickXXX/map/province/<provinceId>`
+  - `treeXXX-tickXXX/map/state/<stateId>`
+  - `treeXXX-tickXXX/map/region/<regionId>`
+  - `treeXXX-tickXXX/map/supplyHub/<supplyHubId>`
+- 解析结果返回稳定 id（如 `province:east`）、kind、显示名和原始实体；渲染/INFO/MCP 不应依赖可变显示名做身份。
+- 节点坐标是否存在由 `TimelineService.load(node)` 负责；resolver 只解释 path，不伪造节点存在性。
+- 未知 type、缺 id、多余路径段、实体不存在分别返回稳定 `AddressException` code；不得静默返回 null/空实体。
+- 暂不支持 adjacency/railway/unit 地址；它们留给后续模块 resolver，不能先塞进 map 的 fallback。
+
 ### 2.4 空间、邻接与补给
 
 - **普通邻接**：由 polygon 的共享边界推导（JTS boundary intersection length > epsilon）；不是 4 邻域像素邻接。
