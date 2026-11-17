@@ -1,0 +1,23 @@
+# Build output
+target/
+*.class
+
+# Local runtime state / databases
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+data/
+runtime/
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Local logs / temp
+*.log
+*.tmp
