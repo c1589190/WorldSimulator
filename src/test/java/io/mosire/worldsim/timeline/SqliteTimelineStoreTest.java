@@ -8,6 +8,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.Statement;
 import java.util.List;
 import java.util.Set;
 
@@ -122,6 +125,45 @@ class SqliteTimelineStoreTest {
 
     store.close();
     assertCode("TIMELINE_STORE_CLOSED", () -> store.find(ref("missing-0")));
+  }
+
+  @Test
+  void schemaVersionIsPinnedAndSetOnCreate() {
+    assertEquals(SqliteTimelineStore.SCHEMA_VERSION, store.schemaVersion());
+    assertEquals(1, store.schemaVersion());
+  }
+
+  @Test
+  void versionZeroDatabaseIsUpgraded(@TempDir Path tempDir) throws Exception {
+    Path file = tempDir.resolve("v0.db");
+    try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + file);
+         Statement statement = connection.createStatement()) {
+      statement.execute("PRAGMA user_version = 0");
+    }
+
+    try (SqliteTimelineStore upgraded = new SqliteTimelineStore(file)) {
+      assertEquals(SqliteTimelineStore.SCHEMA_VERSION, upgraded.schemaVersion());
+      assertTrue(upgraded.isEmpty());
+    }
+  }
+
+  @Test
+  void newerSchemaIsRejectedWithoutLeavingConnectionOpen(@TempDir Path tempDir) throws Exception {
+    Path file = tempDir.resolve("future.db");
+    try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + file);
+         Statement statement = connection.createStatement()) {
+      statement.execute("PRAGMA user_version = " + (SqliteTimelineStore.SCHEMA_VERSION + 1));
+    }
+
+    assertCode("TIMELINE_SCHEMA_TOO_NEW", () -> new SqliteTimelineStore(file));
+
+    try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + file);
+         Statement statement = connection.createStatement()) {
+      statement.execute("PRAGMA user_version = " + SqliteTimelineStore.SCHEMA_VERSION);
+    }
+    try (SqliteTimelineStore recovered = new SqliteTimelineStore(file)) {
+      assertEquals(SqliteTimelineStore.SCHEMA_VERSION, recovered.schemaVersion());
+    }
   }
 
   @Test

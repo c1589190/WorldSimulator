@@ -40,6 +40,7 @@ public final class WorldSimCli {
     try {
       return switch (args[0]) {
         case "demo" -> demo(options(args, 1));
+        case "benchmark" -> benchmark(options(args, 1));
         case "replay" -> replay(options(args, 1));
         case "verify" -> verify(options(args, 1));
         case "tree" -> tree(options(args, 1));
@@ -60,12 +61,7 @@ public final class WorldSimCli {
 
   private static int demo(Map<String, String> options) {
     Path db = Path.of(options.getOrDefault("--db", "runtime/headless-demo.db"));
-    boolean reset = options.containsKey("--reset");
-    if (reset) {
-      deleteDatabase(db);
-    } else if (Files.exists(db)) {
-      System.err.println("数据库已存在: " + db.toAbsolutePath());
-      System.err.println("演示需要新库；重跑请加 --reset 或换 --db 路径。");
+    if (!prepareFreshDatabase(db, options.containsKey("--reset"))) {
       return 1;
     }
 
@@ -146,6 +142,95 @@ public final class WorldSimCli {
     }
   }
 
+  private static int benchmark(Map<String, String> options) {
+    Path db = Path.of(options.getOrDefault("--db", "runtime/benchmark.db"));
+    boolean reset = options.containsKey("--reset");
+    if (!prepareFreshDatabase(db, reset)) {
+      return 1;
+    }
+    int columns = integerOption(options, "--columns", 20);
+    int rows = integerOption(options, "--rows", 15);
+    double cellSize = doubleOption(options, "--cell-size", SyntheticWorld.DEFAULT_CELL_SIZE);
+
+    try (SqliteTimelineStore store = new SqliteTimelineStore(db)) {
+      TimelineService service = new TimelineService(store);
+      long start = System.nanoTime();
+      StaticWorldState state = SyntheticWorld.create(columns, rows, cellSize);
+      long generatedAt = System.nanoTime();
+
+      var issues = WorldMapValidator.validate(state.map());
+      long validatedAt = System.nanoTime();
+      if (!issues.isEmpty()) {
+        var first = issues.get(0);
+        throw new TimelineException("TIMELINE_STATE_INVALID",
+            "合成世界校验失败: " + first.code() + " " + first.message());
+      }
+
+      TimelineNode genesis = service.createGenesis(state, "benchmark");
+      long genesisAt = System.nanoTime();
+
+      String firstProvince = "p-0-0";
+      TimelineWorkingCopy workingCopy = service.openNext(genesis.ref());
+      service.apply(workingCopy, new WorldChange.PutProvince(
+          SampleWorld.renameProvince(state.map(), firstProvince, "Benchmark revised")));
+      TimelineNode main1 = service.save(workingCopy, 1, "benchmark");
+      long deltaAt = System.nanoTime();
+
+      StaticWorldState replayed = service.load(main1.ref());
+      long replayAt = System.nanoTime();
+
+      Map<String, Object> report = new LinkedHashMap<>();
+      report.put("database", db.toAbsolutePath().toString());
+      report.put("columns", columns);
+      report.put("rows", rows);
+      report.put("provinces", state.map().provinces().size());
+      report.put("states", state.map().states().size());
+      report.put("regions", state.map().strategicRegions().size());
+      report.put("adjacencies", state.map().adjacencies().size());
+      report.put("validationIssues", issues.size());
+      report.put("genesis", genesis.ref().toString());
+      report.put("head", service.store().head(new BranchId("main")).orElseThrow().toString());
+      report.put("replayedProvince", replayed.map().provinces().get(firstProvince).name());
+      report.put("stateHash", replayed.contentHash());
+      report.put("timingsMillis", Map.of(
+          "generate", millis(generatedAt - start),
+          "validate", millis(validatedAt - generatedAt),
+          "genesisSave", millis(genesisAt - validatedAt),
+          "deltaSave", millis(deltaAt - genesisAt),
+          "replay", millis(replayAt - deltaAt)));
+      System.out.println(JsonCodec.prettyJson(report));
+      return 0;
+    }
+  }
+
+  private static long millis(long nanos) {
+    return Math.round(nanos / 1_000_000.0);
+  }
+
+  private static int integerOption(Map<String, String> options, String key, int defaultValue) {
+    String value = options.get(key);
+    if (value == null) {
+      return defaultValue;
+    }
+    try {
+      return Integer.parseInt(value);
+    } catch (NumberFormatException e) {
+      throw new IllegalArgumentException(key + " 必须是整数: " + value);
+    }
+  }
+
+  private static double doubleOption(Map<String, String> options, String key, double defaultValue) {
+    String value = options.get(key);
+    if (value == null) {
+      return defaultValue;
+    }
+    try {
+      return Double.parseDouble(value);
+    } catch (NumberFormatException e) {
+      throw new IllegalArgumentException(key + " 必须是数字: " + value);
+    }
+  }
+
   private static int replay(Map<String, String> options) {
     Path db = requiredDb(options);
     NodeRef ref = parseNode(required(options, "--node"));
@@ -212,6 +297,17 @@ public final class WorldSimCli {
     }
   }
 
+  private static boolean prepareFreshDatabase(Path db, boolean reset) {
+    if (reset) {
+      deleteDatabase(db);
+    } else if (Files.exists(db)) {
+      System.err.println("数据库已存在: " + db.toAbsolutePath());
+      System.err.println("需要新库；重跑请加 --reset 或换 --db 路径。");
+      return false;
+    }
+    return true;
+  }
+
   private static Path requiredDb(Map<String, String> options) {
     return Path.of(required(options, "--db"));
   }
@@ -264,10 +360,12 @@ public final class WorldSimCli {
   private static void usage() {
     System.out.println("""
         WorldSimulator headless core CLI
-          demo   [--db <path>] [--reset]        跑完整 genesis/apply/discard/save/fork/replay 演示
-          replay --db <path> --node <branch-tick> 重放并校验节点
-          verify --db <path>                      逐节点重放校验
-          tree   --db <path>                      输出分支/节点树
+          demo      [--db <path>] [--reset]        完整 genesis/apply/discard/save/fork/replay 演示
+          benchmark [--db <path>] [--reset] [--columns N] [--rows N] [--cell-size N]
+                                                     生成合成 polygon 世界并测量校验/保存/回放
+          replay    --db <path> --node <branch-tick> 重放并校验节点
+          verify    --db <path>                      逐节点重放校验
+          tree      --db <path>                      输出分支/节点树
         """);
   }
 }

@@ -46,6 +46,24 @@ class WorldSimCliTest {
   }
 
   @Test
+  void benchmarkGeneratesAndReplaysThreeHundredProvinces(@TempDir Path tempDir) {
+    Path db = tempDir.resolve("benchmark.db");
+    CliResult result = capture(() -> WorldSimCli.run(new String[]{
+        "benchmark", "--db", db.toString(), "--reset", "--columns", "20", "--rows", "15"}));
+
+    assertEquals(0, result.exit(), result.stderr());
+    assertTrue(result.stdout().contains("\"provinces\" : 300"), result.stdout());
+    assertTrue(result.stdout().contains("\"adjacencies\" : 565"), result.stdout());
+    assertTrue(result.stdout().contains("\"validationIssues\" : 0"), result.stdout());
+    assertTrue(result.stdout().contains("\"replayedProvince\" : \"Benchmark revised\""), result.stdout());
+
+    try (SqliteTimelineStore store = new SqliteTimelineStore(db)) {
+      TimelineService service = new TimelineService(store);
+      assertEquals(2, service.verifyAll());
+    }
+  }
+
+  @Test
   void replayAndVerifyCommandsReturnZero(@TempDir Path tempDir) {
     Path db = tempDir.resolve("demo.db");
     assertEquals(0, capture(() -> WorldSimCli.run(new String[]{

@@ -28,6 +28,9 @@ import java.util.Set;
  * 不会留下“节点已写、checkpoint 没写”的半状态。
  */
 public final class SqliteTimelineStore implements TimelineStore {
+  /** 当前 schema 版本；扩展表结构前必须递增并写迁移分支。 */
+  public static final int SCHEMA_VERSION = 1;
+
   private static final String SELECT_COLUMNS =
       "branch, tick, parent_branch, parent_tick, changeset_json, state_hash,"
           + " saved_at_epoch_milli, saved_by";
@@ -78,12 +81,12 @@ public final class SqliteTimelineStore implements TimelineStore {
       throw new TimelineException("TIMELINE_STORE_OPEN_FAILED", "无法创建 SQLite 目录: " + absolute, e);
     }
     this.connection = open("jdbc:sqlite:" + absolute);
-    initialize();
+    initializeOnConstruction();
   }
 
   private SqliteTimelineStore(Connection connection) {
     this.connection = connection;
-    initialize();
+    initializeOnConstruction();
   }
 
   /** 测试/短生命周期场景使用的内存库；单连接生命周期内有效。 */
@@ -106,22 +109,50 @@ public final class SqliteTimelineStore implements TimelineStore {
     }
   }
 
+  private void initializeOnConstruction() {
+    try {
+      initialize();
+    } catch (RuntimeException e) {
+      try {
+        connection.close();
+      } catch (SQLException closeFailure) {
+        e.addSuppressed(closeFailure);
+      }
+      throw e;
+    }
+  }
+
   @Override
   public synchronized void initialize() {
     ensureOpen();
     if (initialized) {
       return;
     }
-    transaction(c -> {
-      try (Statement statement = c.createStatement()) {
-        statement.execute(CREATE_NODES);
-        statement.execute(CREATE_CHECKPOINTS);
-        statement.execute("CREATE INDEX IF NOT EXISTS idx_timeline_nodes_parent"
-            + " ON timeline_nodes(parent_branch, parent_tick)");
-      }
-      return null;
-    });
+    int version = readUserVersion();
+    if (version > SCHEMA_VERSION) {
+      throw new TimelineException("TIMELINE_SCHEMA_TOO_NEW",
+          "数据库 schema 版本过新: found=" + version + " supported=" + SCHEMA_VERSION);
+    }
+    if (version < SCHEMA_VERSION) {
+      // 首版迁移策略：v0 空库/旧开发库 → 建立 v1 表并抬版本。
+      transaction(c -> {
+        try (Statement statement = c.createStatement()) {
+          statement.execute(CREATE_NODES);
+          statement.execute(CREATE_CHECKPOINTS);
+          statement.execute("CREATE INDEX IF NOT EXISTS idx_timeline_nodes_parent"
+              + " ON timeline_nodes(parent_branch, parent_tick)");
+          statement.execute("PRAGMA user_version = " + SCHEMA_VERSION);
+        }
+        return null;
+      });
+    }
     initialized = true;
+  }
+
+  /** 当前数据库文件的 schema 版本，供健康检查/CLI 使用。 */
+  public synchronized int schemaVersion() {
+    ensureOpen();
+    return readUserVersion();
   }
 
   @Override
@@ -444,6 +475,18 @@ public final class SqliteTimelineStore implements TimelineStore {
         result.getString("state_hash"),
         result.getLong("saved_at_epoch_milli"),
         result.getString("saved_by"));
+  }
+
+  private int readUserVersion() {
+    try (Statement statement = connection.createStatement();
+         ResultSet result = statement.executeQuery("PRAGMA user_version")) {
+      if (!result.next()) {
+        throw new TimelineException("TIMELINE_STORE_CORRUPT", "SQLite 未返回 user_version");
+      }
+      return result.getInt(1);
+    } catch (SQLException e) {
+      throw new TimelineException("TIMELINE_STORE_ERROR", "读取 schema 版本失败", e);
+    }
   }
 
   private void ensureOpen() {
