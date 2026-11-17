@@ -15,7 +15,6 @@ import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -120,9 +119,9 @@ public final class SqliteTimelineStore implements TimelineStore {
         statement.execute("CREATE INDEX IF NOT EXISTS idx_timeline_nodes_parent"
             + " ON timeline_nodes(parent_branch, parent_tick)");
       }
-      initialized = true;
       return null;
     });
+    initialized = true;
   }
 
   @Override

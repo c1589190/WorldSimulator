@@ -122,6 +122,7 @@ public final class TimelineService {
       }
       requireHash(node, state, "replay");
     }
+    requireValidState(state);
     return state;
   }
 
@@ -272,7 +273,7 @@ public final class TimelineService {
       ValidationIssue first = issues.get(0);
       throw new TimelineException("TIMELINE_STATE_INVALID",
           "静态状态校验失败: " + issues.size() + " 个问题；首个: "
-              + first.code() + " " + first.message(), null);
+              + first.code() + " " + first.message());
     }
   }
 

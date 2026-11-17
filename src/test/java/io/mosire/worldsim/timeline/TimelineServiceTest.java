@@ -56,6 +56,8 @@ class TimelineServiceTest {
     assertEquals(2, workingCopy.pendingChangeCount());
     assertEquals("East two",
         workingCopy.currentState().map().provinces().get(SampleWorld.EAST).name());
+    assertFalse(store.exists(new NodeRef(new BranchId("main"), 1)));
+    assertEquals(genesis.ref(), store.head(new BranchId("main")).orElseThrow());
 
     TimelineNode main1 = service.save(workingCopy, 1, "gm:test");
 
@@ -171,8 +173,7 @@ class TimelineServiceTest {
   @Test
   void firstNodeOfForkIsAlwaysCheckpointed() {
     TimelineService sparse = new TimelineService(store, 100);
-    TimelineNode main1 = sparse.openNext(genesis.ref()).baseNode();
-    TimelineWorkingCopy advance = sparse.openNext(main1.ref());
+    TimelineWorkingCopy advance = sparse.openNext(genesis.ref());
     sparse.apply(advance, rename(initial, SampleWorld.EAST, "East one"));
     TimelineNode saved = sparse.save(advance, 1, "gm:test");
     assertTrue(store.checkpoint(saved.ref()).isEmpty());
@@ -181,6 +182,24 @@ class TimelineServiceTest {
     sparse.apply(fork, rename(initial, SampleWorld.WEST, "West fork"));
     TimelineNode forkNode = sparse.save(fork, 1, "gm:test");
     assertTrue(store.checkpoint(forkNode.ref()).isPresent());
+  }
+
+  @Test
+  void nodesWithoutCheckpointAncestryCannotBeLoaded() {
+    try (SqliteTimelineStore otherStore = SqliteTimelineStore.inMemory()) {
+      TimelineService otherService = new TimelineService(otherStore);
+      StaticWorldState state = SampleWorld.create();
+      TimelineNode root = new TimelineNode(
+          new NodeRef(new BranchId("main"), 0),
+          null,
+          WorldChangeSet.emptyJson(),
+          state.contentHash(),
+          1_700_000_000_000L,
+          "test");
+      otherStore.saveNode(root, null);
+
+      assertCode("TIMELINE_CHECKPOINT_MISSING", () -> otherService.load(root.ref()));
+    }
   }
 
   @Test
