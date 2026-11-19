@@ -1,13 +1,13 @@
 # STATUS.md —— 当前状态
 
-> **更新时间**：2026-11-19 11:29 UTC（19:29 CST）
-> **当前目标**：设计地图地名定位、国家归属和 ORBAT 部署的下一阶段闭环。
-> **当前阶段**：文件世界、GM MCP 与只读查看器已推送到 `origin/main` 的交付提交 `f28da02`。地理与国家调查完成，已记录真实地图实测和工程建议。
-> **责任区与设计**：[查看器实施计划](../superpowers/plans/2026-11-19-map-viewer.md)、[查看器专题设计](../superpowers/specs/2026-11-19-readonly-map-viewer.md)、[地理定位与国家/ORBAT 调查](../superpowers/reports/2026-11-19-geography-country-orbat-recon.md)。
+> **更新时间**：2026-11-19 21:10 CST
+> **当前目标**：交付已验收的国家、单位部署和编制查看阶段。
+> **当前阶段**：编制图窗口已验收，运行于 `http://127.0.0.1:8766/?node=division-test-1`。选择任一装甲师后点「查看编制图」。交互契约见[查看器专题](../superpowers/specs/2026-11-19-readonly-map-viewer.md)。
+> **责任区与设计**：[地图单位与 ORBAT 契约](../superpowers/specs/2026-11-19-unit-address-and-orbat-format.md)、[实施计划](../superpowers/plans/2026-11-19-country-orbat-pilot.md)、[地理定位与国家调查](../superpowers/reports/2026-11-19-geography-country-orbat-recon.md)。
 
 ## 源码基线与有效入口
 
-- 仓库 `~/WorldSimulator`，单模块 Maven 工程，JDK 21。交付分支为 `main`，本轮开发起点是 `d9df31f918d1339c533fb5098c5b6ec1412e82a8`。当前版本与工作树以 `git status --short --branch` 为准。
+- 仓库 `~/WorldSimulator`，单模块 Maven 工程，JDK 21。交付分支为 `main`，本阶段以 `aacb3ed` 为基线。当前提交与同步状态见 `git log -1 --oneline` 和 `git status --short --branch`。
 - 交付范围为文件存档、迁移、GM MCP 及查看器的代码、测试与文档。打包产物是 `target/worldsim-0.1.0-SNAPSHOT.jar`。`world/` 是 gitignored 本地用户数据，旧 `runtime/worlds/magna-europa.db` 保留。
 - 用户设计原稿：`docs/superpowers/specs/2026-11-17-worldsim-architecture-design-source.md`；专题设计：`docs/superpowers/specs/2026-11-17-map-orbat-info-timeline-design.md`；裁定索引：`docs/superpowers/DESIGN_RULINGS.md`。
 - 项目维护入口：`docs/AGENTS.md`、`docs/agents/MAINTENANCE_RULINGS.md`；构建和启动步骤见根 `README.md`。
@@ -25,17 +25,73 @@
 - 保存前检查普通邻接是否对应 polygon，并禁止引入新的不一致；特殊邻接单独处理。`verifyAll` 重放每个节点自身 delta 并校验 checkpoint，修复旧审计所列两项缺口。入口：`src/main/java/io/mosire/worldsim/map/PolygonTopology.java:53`、`src/main/java/io/mosire/worldsim/timeline/TimelineService.java:138`。
 - `world/provenance.json` 将来源提示与节点/hash 关联，记录来源、推断和几何修复；后代若更改对应字段，查询不再沿用该字段的旧提示。其是附加证据而非第二套状态。入口：`src/main/java/io/mosire/worldsim/app/WorldProvenance.java`。
 - 只读地图查看器可用 `viewer [--port 8765]` 独立启动，或用 `mcp --viewer-port 8765` 与 GM MCP 共用进程。支持省 ID/地址搜索、原始几何点选、可见瓦片、三种着色、铁路/补给中心与已保存节点切换。入口见 `src/main/java/io/mosire/worldsim/app/viewer/WorldViewerServer.java` 和 `src/main/resources/io/mosire/worldsim/viewer/index.html`。
-- 待实现 ORBAT 原生编制、DSH `mil-org` 交换、单位部署和单节点最终态，以及 INFO 任意合法地址、长短文本和自定义类型。ORBAT 和 INFO 的变化继续走同一 `Command → ChangeSet → TimelineNode`。DM 权限、动态补给计算、离线视图更改的导入保留为后续工作。
+- 国家模块保存国家及每省的归属与控制证据。单位模块保存原生 ORBAT 文档、理想版本引用、实际编制和部署，支持 DSH `mil-org` 交换。地名、国家和单位共用 `NodeAddress`，变更仍走 `Command → ChangeSet → TimelineNode`。主要接口为 `src/main/java/io/mosire/worldsim/app/WorldTools.java`。
+- 兵牌放大时在实际部署点附近展开，全图时聚合计数，低于全图 0.9 倍时隐藏。左侧军队面板提供单位名单和编制图入口。独立窗口用卡片和连线展示编制，支持实际与理想切换、折叠、缩放和节点详情。编制图入口见 `src/main/resources/io/mosire/worldsim/viewer/military.js:359`。
+- INFO 任意地址、长短文本及自定义类型的运行时、DM 权限、离线视图更改导入保留为后续工作。
 
 ## 当前本地世界与来源
 
 - 社区地图是欧洲范围的 **Magna Europa: Reforged**，源 `https://github.com/AzurCrystal/Magna-Europa.git`，固定提交 `d7a57759c188a034c49a0e96aceb1702fa76fc74`，HOI4 1.19.* / mod 0.99.6；raw 在 `runtime/imports/MagnaEuropa`。上游根目录无标准 LICENSE，公开分发前仍需确认；下载脚本 `tools/fetch-community-map.sh`。
 - 当前世界为 `world/world.json` 的 `magnaeuropa`，只有 `main-0`，hash `sha256:097b73086f835cd63df788a787c09cd32fd165be896b39b158c85c43139371ff`。21670 省、2986 州、253 战略区域、674 补给中心、1921 铁路、65196 邻接、27504 EntityLinks。
+- 1936 葡萄牙验收世界位于 `runtime/portugal-1936-demo.ncxp4mk5/world/`。`portugal-1936-1` 记录 79 省归属和 Lisboa 的单位 `por-governo`。`portugal-1936-2` 在此基础上补入剧本中的 7 条部署，合计 Lisboa 3 个、Porto 3 个、Coimbra 2 个。实际控制与编制数量保持未知。原 8765 服务仍指向原 `main-0`。[部署来源](https://github.com/AzurCrystal/Magna-Europa/blob/d7a57759c188a034c49a0e96aceb1702fa76fc74/history/units/POR_1936.txt#L40)
+- 演示世界的 `counter-test-1` 从 `main-0` 分叉。Lisboa（19738）有 6 个明确标注的测试单位，显示坐标同为 `(783, 2274)`，来源标记为 `fixture:viewer-counter-zoom`。构造命令见演示目录的 `counter-zoom-test-commands.json`。
+- 演示世界的 `division-test-1` 从 `main-0` 分叉，两个测试装甲师均部署在 Lisboa（19738）的同一显示点。两师各有独立实际编制树，共用一个理想模板。地图只投影两条师级部署实例，团、营、连、排由编制树展示，见 `src/main/java/io/mosire/worldsim/app/WorldQueries.java:139`。测试来源为 `fixture:viewer-division-hierarchy`，构造命令见演示目录的 `division-qa/commands.json`。
 - 只读一致性备份在 `world/imports/legacy.db`；它用于迁移追溯，正常运行不读取。`world/view/current.json` 指向 `main-0` 的可读视图；独立导出位于 `world/exports/bb64c7db-1d4c-4cd2-a408-798552c4a172/`。
 - 通过固定源重新导入并复现完全相同的创世 hash，定位 heightmap 推断海省 `1644, 3721, 8372` 和 `GeometryFixer` 修复省形 `3458, 9587, 16241, 16505, 16622, 16923, 17515, 17967`。信息记录在 `world/provenance.json`。2026-11-19 逐项核对原始位图与导入结果，并在查看器验证各省的来源提示。证据见下表。
 - 真实地图普通邻接 64387 条，与 polygon 推导的 64387 条一致，特殊邻接 809 条。早期探针只排除 `special-` 前缀，误将 10 条 `kind=special` 计作普通邻接；原始记录核对后已纠正，实际普通拓扑差异为 0。迁移报告 `world/migration-report.json`、证据 `/tmp/worldsim-border-probe.log`。
 
 ## 最近验证
+
+### 2026-11-19 编制图窗口
+
+证据位于 `runtime/portugal-1936-demo.ncxp4mk5/formation-window-qa/`。
+
+| 项目 | 命令或方式 | 结果与证据 |
+|---|---|---|
+| 全量构建 | 隔离目录运行 `mvn -o clean verify` | **PASS**，rc=0，93 tests / 0 failures / 0 errors / 0 skipped。见 `maven.log`。 |
+| 浏览器交互 | 在 8766 运行 `node browser.cjs` | **PASS**，rc=0。Chromium 核对两师各自的连线、同级卡片位置、排级详情、分支折叠、拖动及缩放、编制切换、关窗后保留地图选中、编制节点地址直开、空编制、节点切换和 390 px 触屏。见 `browser.log` 和截图 `first-division.png`、`second-division.png`、`mobile.png`。 |
+| Windows 访问 | Windows `curl.exe` 请求 8766 的页面和 `/api/map?node=division-test-1` | **PASS**，rc=0，页面包含编制图窗口，返回原样例 hash 和 2 个部署单位。见 `windows-index.html`、`windows-map.json`。 |
+
+### 2026-11-19 同级装甲师与下属编制
+
+证据位于 `runtime/portugal-1936-demo.ncxp4mk5/division-qa/`。
+
+| 项目 | 命令或方式 | 结果与证据 |
+|---|---|---|
+| 全量构建 | 隔离目录运行 `mvn -o clean verify` | **PASS**，rc=0，93 tests / 0 failures / 0 errors / 0 skipped。自动回归覆盖同省两师投影、同点及独立编制树。见 `maven.log`。 |
+| 部署保存及回放 | 通过 `seed.py` 调用 GM MCP，在演示目录运行新 jar 的 `verify` | **PASS**，rc=0，校验 5 个节点。核对两师同点、同层级、独立实际编制和共用理想地址。主世界清单逐字节一致。见 `seed.log`、`verify.json`。 |
+| 浏览器交互 | 运行 `node browser.cjs` | **PASS**，rc=0。两张 50×32 师级兵牌点选、下属团到排展开、共用理想模板、叠牌数字 2、最低倍率隐藏与恢复通过。390 px 触屏点选通过。见 `browser.log`、`stack.png`、`first-division.png`、`second-division.png`。 |
+| Windows 访问 | Windows `curl.exe` 请求 8766 的 `/api/map?node=division-test-1` | **PASS**，rc=0，返回两个部署单位。见 `windows-map.json`。 |
+
+### 2026-11-19 兵牌尺寸与最低倍率
+
+证据位于 `runtime/portugal-1936-demo.ncxp4mk5/counter-zoom-qa/`。
+
+| 项目 | 命令或方式 | 结果与证据 |
+|---|---|---|
+| 全量构建 | 隔离目录运行 `mvn -o clean verify` | **PASS**，rc=0，92 tests / 0 failures / 0 errors / 0 skipped。日志 `maven.log`。 |
+| 节点回放 | 在演示目录运行新 jar 的 `verify` | **PASS**，rc=0，校验 4 个节点。见 `verify.json`。 |
+| 浏览器 | 在 8766 运行 `node browser.cjs` | **PASS**，rc=0。Chromium 实测 60×38 兵牌，6 个单位滚轮缩小后依次聚合和隐藏，反向恢复。隐藏后点部署点命中 Lisboa。390 px 触屏及侧栏改变视口后保持最低倍率通过。见 `browser.log` 和三档截图。 |
+| Windows 访问 | Windows `curl.exe` 请求 8766 的 `/api/map?node=counter-test-1` | **PASS**，rc=0。返回 6 个部署单位，见 `windows-map.json`。 |
+
+### 2026-11-19 兵牌与编制侧栏
+
+| 项目 | 命令或方式 | 结果与证据 |
+|---|---|---|
+| 全量测试与打包 | 同源隔离构建运行 `mvn -o clean verify` | **PASS**，rc=0，92 tests / 0 failures / 0 errors / 0 skipped。增加兵牌投影与浏览器模块路由断言。日志 `/tmp/worldsim-military-verify.log`，演示 jar `target/worldsim-country-orbat.jar`。 |
+| 剧本部署和全链回放 | `python3 /tmp/worldsim-seed-portugal-counters.py`，演示目录运行 jar 的 `verify` | **PASS**，rc=0，验证 3 个节点。新增 `portugal-1936-2`，主世界清单逐字节一致。证据 `/tmp/worldsim-portugal-counters-seed.log`、`/tmp/worldsim-portugal-counters-verify.json`。 |
+| 浏览器交互 | `node /tmp/worldsim-portugal-counters-browser.cjs` | **PASS**，rc=0。Chromium 验证全图叠牌、同省展开、缩小再聚合、左侧编制与右侧省份并行、实际与理想切换、地址、来源和节点切换。浏览器注入的测试编制验证排级和 0 人，390 px 触屏验收及 300 单位密集排布保留全部名单。截图 `/tmp/worldsim-counters-unit.png`、`/tmp/worldsim-counters-mobile.png`，日志 `/tmp/worldsim-portugal-counters-browser.log`。 |
+| Windows 访问 | `curl.exe -4 --noproxy '*'` 请求 8766 的 `/api/map?node=portugal-1936-2` | **PASS**，rc=0，返回 8 个部署单位与新节点 hash。证据 `/tmp/worldsim-portugal-counters-windows.json`。 |
+| 文档与资源检查 | `python3 tools/check-docs.py`、`git diff --check`、`node --check` 两个 JS 模块 | **PASS**，rc=0，生产 jar 内的 JS、CSS 与工作树一致。 |
+
+### 2026-11-19 国家与单位切片
+
+| 项目 | 命令或方式 | 结果与证据 |
+|---|---|---|
+| 全量测试与打包 | 同源隔离构建运行 `mvn -o verify` | **PASS**，rc=0，92 tests / 0 failures / 0 errors / 0 skipped。包含旧 canonical JSON、草稿原子性、理想版本绑定、单位独立实际编制、差额和历史部署回归。日志 `/tmp/worldsim-country-orbat-verify.log`，演示 jar `target/worldsim-country-orbat.jar`。 |
+| 真图 MCP 与回放 | `python3 /tmp/worldsim-seed-portugal-pilot.py`，在副本中用新 jar 运行 `verify` | **PASS**，rc=0。通过名称找到 Lisboa，79 省批量预览并保存分支，读出单位与两份编制地址和兼容导出损失报告。两个节点校验通过，原始 `main-0` hash 保持一致。证据 `/tmp/worldsim-portugal-pilot.log`、`/tmp/worldsim-portugal-pilot-verify.json`。 |
+| 浏览器与 Windows 访问 | `node /tmp/worldsim-portugal-browser.cjs`，从 Windows 请求 8766 的 `/api/map` | **PASS**，rc=0。Chromium 验收归属图层、地名命中、省份与单位跳转、两份编制、单位标记点选及回到 `main-0`。Windows 侧成功返回样例节点。日志 `/tmp/worldsim-portugal-browser.log`，截图 `/tmp/worldsim-portugal-1936-viewer.png`。 |
+| 文档与资源检查 | `python3 tools/check-docs.py`、`git diff --check`、`node --check src/main/resources/io/mosire/worldsim/viewer/viewer.js` | **PASS**，rc=0，11 个必需文件、4 篇 spec、7 篇报告。 |
 
 ### 2026-11-19 地理与国家调查
 
@@ -79,8 +135,10 @@
 
 ## 风险、未验证与下一步
 
+- 地理配准停留在主图试验，留一验证同省命中 20/25。图幅配准、经纬度查省和外部边界叠层尚未接入。证据见[地理调查](../superpowers/reports/2026-11-19-geography-country-orbat-recon.md)。
+- 编制查询已返回节点直属数量和直属差额。整个下属树的人员、装备汇总及覆盖率仍待实现，见 `src/main/java/io/mosire/worldsim/app/WorldQueries.java:67`。行军、动态补给与战斗后续接入。
 - 大图在本机的迁移和校验占用约 1.4–1.9 GB RSS，启动与全链验证存在多秒级成本；保存的派生视图增加磁盘占用。可根据使用情况继续优化，不能把本机结果当性能保证。
 - 文件存储已做多个提交阶段的强制进程退出与重启测试；真实断电、其他操作系统/文件系统及其目录同步语义 `NOT_RUN`。复制或备份世界应在服务停止、锁释放后进行。
 - Maven 构建依赖本地 Maven 仓库 `io.mosire:agentlib-mosire:0.2.5`，干净机器的依赖准备尚未验证。
 - 浏览器交互实测于 WSL Chromium，Windows 已验证正式端口的 IPv4 回环 HTTP。其他浏览器实测 `NOT_RUN`。
-- 下一步第一条命令 `sed -n '1,120p' docs/superpowers/reports/2026-11-19-geography-country-orbat-recon.md`。先定地名查询和国家持久化的专题契约，再用葡萄牙验证首个国家与编制部署切片。
+- 下一步第一条命令 `sed -n '29,52p' docs/superpowers/reports/2026-11-19-geography-country-orbat-recon.md`。后续可按图幅接经纬度配准，再结合源资料扩展剧本范围。

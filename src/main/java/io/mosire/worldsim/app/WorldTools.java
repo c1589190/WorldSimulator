@@ -29,9 +29,15 @@ public final class WorldTools {
     ToolRegistry tools = new ToolRegistry();
     tools.register(tool(app, "world_overview", "读取世界或指定节点的摘要", false,
         props("node", string()), List.of(), (a, c) -> app.overview(optionalString(a, "node"))));
-    tools.register(tool(app, "world_lookup", "按节点地址读取地图实体；默认省略大型几何", false,
+    tools.register(tool(app, "world_lookup", "按节点地址读取地图、国家或编制实体；地图查询默认省略大型几何", false,
         props("address", string(), "includeGeometry", bool()), List.of("address"),
         (a, c) -> app.lookup(requiredString(a, "address"), optionalBool(a, "includeGeometry", false))));
+    tools.register(tool(app, "world_search", "按名称、别名或 ID 查当前或指定保存节点的实体", false,
+        props("node", string(), "query", string(), "kind", string(), "offset", integer(), "limit", integer()),
+        List.of("query"), (a, c) -> app.search(optionalString(a, "node"), requiredString(a, "query"),
+            optionalString(a, "kind"), optionalInt(a, "offset", 0), optionalInt(a, "limit", 25))));
+    tools.register(tool(app, "orbat_export", "从编制文档或节点地址导出 DSH mil-org v1，并报告损失", false,
+        props("address", string()), List.of("address"), (a, c) -> app.exportMilOrg(requiredString(a, "address"))));
     tools.register(tool(app, "world_validate", "校验节点并列出遗留拓扑差异", false,
         props("node", string()), List.of("node"), (a, c) -> app.validate(requiredString(a, "node"))));
     tools.register(tool(app, "timeline_tree", "分页列出分支与节点", false,
@@ -45,7 +51,7 @@ public final class WorldTools {
     tools.register(tool(app, "edit_open", "从已保存节点打开推进或 fork 工作副本", true,
         props("base", string(), "expectedHash", string(), "forkBranch", string()), List.of("base", "expectedHash"),
         (a, c) -> app.open(actor(c), requiredString(a, "base"), requiredString(a, "expectedHash"), optionalString(a, "forkBranch"))));
-    tools.register(tool(app, "edit_apply", "原子批量预览或修改草稿。commands 支持 patchProvince 和 WorldChange 地图操作", true,
+    tools.register(tool(app, "edit_apply", "原子批量预览或修改地图、国家、编制和部署", true,
         props("draftId", string(), "expectedVersion", integer(), "requestId", string(), "commands",
             Map.of("type", "array", "minItems", 1, "maxItems", 100, "items", commandSchema()), "dryRun", bool()),
         List.of("draftId", "expectedVersion", "requestId", "commands"),
@@ -130,16 +136,37 @@ public final class WorldTools {
         "key", "category", "targetId", "tags");
     Map<String, Object> adjacency = object(props("a", string(), "b", string(), "kind", string(),
         "borderLength", number, "through", nullableString), "a", "b", "kind", "borderLength");
+    Map<String, Object> evidence = object(props("source", nullableString, "status", string(),
+        "confidence", nullableNumber, "date", nullableString), "status");
+    Map<String, Object> country = object(props("id", string(), "name", string(), "aliases", array(string()),
+        "color", nullableString, "capitalProvinceId", nullableString, "evidence", evidence), "id", "name", "evidence");
+    Map<String, Object> assignment = object(props("countryId", string(), "evidence", evidence), "countryId", "evidence");
+    Map<String, Object> ref = object(props("documentId", string(), "nodeId", string(), "contentHash", nullableString),
+        "documentId", "nodeId");
+    Map<String, Object> unit = object(props("id", string(), "name", string(), "type", nullableString,
+        "countryId", nullableString, "provinceId", nullableString,
+        "idealRef", Map.of("anyOf", List.of(ref, Map.of("type", "null"))),
+        "actualRef", Map.of("anyOf", List.of(ref, Map.of("type", "null"))),
+        "evidence", evidence, "deploymentEvidence", evidence), "id", "name", "evidence");
+    Map<String, Object> document = object(props("format", string(), "documentId", string(), "role", string(),
+        "date", nullableString, "root", Map.of("type", "object", "required", List.of("nodeId", "name"),
+            "description", "orbat-native-v1 递归节点，字段含 nodeId、name、type、echelon、personnel、equipment、children、extensions")),
+        "format", "documentId", "role", "root");
     return Map.of("type", "object", "required", List.of("op"), "additionalProperties", true,
-        "description", "patchProvince 使用 id 和需要修改的字段；rebuildAdjacencies 从 polygon 重算普通邻接并保留特殊邻接；其他操作使用对应嵌套实体或 ID。可组合多个命令维护引用一致性。",
+        "description", "地图操作用相应实体或 ID。setTerritory 用 provinceIds、field 和 assignment；deployUnit 用 unitId、provinceId 和 evidence。可组合多个命令维护引用一致性。",
         "properties", props("op", Map.of("type", "string", "enum", List.of("patchProvince", "rebuildAdjacencies", "putProvince", "removeProvince",
                 "putState", "removeState", "putStrategicRegion", "removeStrategicRegion", "putSupplyHub", "removeSupplyHub",
-                "putRailway", "removeRailway", "putEntityLink", "removeEntityLink", "replaceAdjacencies")),
+                "putRailway", "removeRailway", "putEntityLink", "removeEntityLink", "replaceAdjacencies",
+                "putCountry", "setTerritory", "putOrbatDocument", "importMilOrg", "putUnit", "deployUnit")),
             "id", string(), "name", string(), "kind", string(), "terrain", string(), "shape", shape,
             "displayPoint", point, "stateId", nullableString, "regionId", nullableString, "tags", array(string()),
-            "province", province, "provinceId", string(), "state", region, "region", region,
+            "province", province, "provinceId", nullableString, "state", region, "region", region,
             "supplyHub", hub, "supplyHubId", string(), "railway", rail, "railwayId", string(),
-            "entityLink", link, "key", string(), "adjacencies", array(adjacency)));
+            "entityLink", link, "key", string(), "adjacencies", array(adjacency),
+            "country", country, "provinceIds", array(string()), "field", string(),
+            "assignment", Map.of("anyOf", List.of(assignment, Map.of("type", "null"))),
+            "document", document, "documentId", string(), "role", string(), "source", string(),
+            "milOrg", Map.of("type", "object"), "unit", unit, "unitId", string(), "evidence", evidence));
   }
 
   private static Map<String, Object> array(Map<String, Object> item) { return Map.of("type", "array", "items", item); }

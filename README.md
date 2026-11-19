@@ -1,6 +1,6 @@
 # WorldSimulator
 
-Agent 导向的世界模拟器/编辑器。当前版本提供原生 polygon 地图、可读文件世界、Simos 风格时间线、GM stdio MCP 和本地只读地图查看器。ORBAT 和 INFO 运行时在后续阶段。
+Agent 导向的世界模拟器/编辑器。当前版本提供原生 polygon 地图、地名与实体查询、国家归属和控制、ORBAT 编制与单位部署、Simos 风格时间线、GM stdio MCP 和本地只读地图查看器。
 
 ## 构建
 
@@ -99,7 +99,7 @@ java -Xmx5g -jar target/worldsim-0.1.0-SNAPSHOT.jar export
 java -Xmx5g -jar target/worldsim-0.1.0-SNAPSHOT.jar viewer
 ```
 
-在 Windows 或 WSL 浏览器打开 `http://127.0.0.1:8765/`。拖动平移，滚轮或按钮缩放。点击地图、输入省 ID，或粘贴如 `main-0/map/province/1644` 的完整地址可查看省份和来源提示。图层可以按地形、州、战略区域着色，并叠加铁路省链和补给中心。页首选择已保存的时间线节点。默认端口可用 `viewer --port <port>` 调整。
+在 Windows 或 WSL 浏览器打开 `http://127.0.0.1:8765/`。拖动平移，滚轮或按钮缩放。可输入地名、省 ID 或完整的节点地址。图层支持地形、州、战略区域、国家归属和实际控制着色，叠加铁路省链、补给中心和部署单位。点省份列表或单位标记可查看单位、部署及两份编制。页首选择已保存的时间线节点，也可用 `?node=<branch-tick>` 直接进入某个节点。默认端口可用 `viewer --port <port>` 调整。
 
 同时使用 Agent 与查看器时，在 MCP 客户端的 jar 参数末尾加 `mcp --viewer-port 8765`，两者共用进程与世界锁。查看器通过页首的**刷新**读取新保存节点。启动地址写到 stderr，MCP 的 stdout 保留协议输出。独立查看与组合启动均使用当前工作目录的 `world/`。
 
@@ -107,10 +107,11 @@ java -Xmx5g -jar target/worldsim-0.1.0-SNAPSHOT.jar viewer
 
 AgentLib 工具调用经过角色、工具和世界资源授权；调用身份由启动端绑定。当前工具：
 
-- `world_overview`、`world_lookup`、`world_validate`：读世界摘要、实体和地图拓扑；`world_lookup` 默认不返回 polygon 顶点。
+- `world_overview`、`world_lookup`、`world_search`、`world_validate`：读世界摘要、实体和地图拓扑，通过地名、别名和 ID 查询同一节点下的规范地址。`world_lookup` 默认省略 polygon 顶点。
 - `timeline_tree`、`timeline_diff`、`timeline_verify`：查看和完整验证已保存时间线。
 - `edit_open`、`edit_apply`、`edit_save`、`edit_discard`：打开内存草稿、批量预览/应用、保存或放弃。
 - `world_view`、`world_export`：重建可读视图，或导出全部已提交分支。
+- `orbat_export`：通过已保存的文档或编制节点地址返回 `mil-org` 和损失报告。
 
 例如，运行在同一 WSL 环境、使用 `mcpServers` 配置格式的客户端可以这样启动服务：
 
@@ -151,9 +152,15 @@ AgentLib 工具调用经过角色、工具和世界资源授权；调用身份�
 
 来源报告为附加证据，不替代时间线状态。`world_overview` 显示源信息和几何修复摘要；`world_lookup` 对报告中匹配的省字段返回 source/status/confidence，当后代节点修改该字段后不再沿用旧提示。
 
+## 国家与单位部署
+
+`world_search` 接受 `query`、可选的 `node` 和 `kind`，例如查询 `{"query":"Lisboa","kind":"province"}`。命中包含稳定 ID、规范地址和上下文。国家、单位、编制文档的地址示例分别为 `scene-1/country/POR`、`scene-1/orbat/unit/por-governo`、`scene-1/orbat/doc/por-governo-actual/node/root`。
+
+用 `putCountry` 定义国家，`setTerritory` 为明确的省 ID 列表分别设置 `owner` 或 `controller`。每条归属记录带来源，预览会列出覆盖的省和被替换的归属。用 `putOrbatDocument` 写 `orbat-native-v1`，或用 `importMilOrg` 导入 DSH 文件内容。再用 `putUnit` 引用两类编制，可用 `deployUnit` 调整同一单位的部署引用。单位查询返回有效编制的规范地址。源文件没给出的员额或装备以未知显示。字段与地址规则见[单位与编制契约](docs/superpowers/specs/2026-11-19-unit-address-and-orbat-format.md)。
+
 ## 当前范围
 
-已实现地图导入、原生 polygon、地图实体与地址解析、文件时间线、节点回放、GM MCP、可读地图视图和本地只读查看器。待实现 ORBAT/INFO 领域运行时、DM 权限和补给计算。文件存档的进程中断恢复已做进程级验证，跨平台实际断电行为仍需在目标文件系统测试。
+已实现地图与地名查询、国家归属和控制、ORBAT 编制、单位部署与回放、文件时间线、GM MCP 和只读查看器。INFO 运行时、DM 权限、外部经纬度配准和动态行军、战斗、补给在后续阶段。文件存档的进程中断恢复已做进程级验证，跨平台实际断电行为仍需在目标文件系统测试。
 
 设计及状态见 [`docs/agents/STATUS.md`](docs/agents/STATUS.md) 和 [`docs/superpowers/specs/2026-11-17-map-orbat-info-timeline-design.md`](docs/superpowers/specs/2026-11-17-map-orbat-info-timeline-design.md)。
 

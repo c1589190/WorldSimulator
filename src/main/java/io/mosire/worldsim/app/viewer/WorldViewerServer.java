@@ -16,8 +16,8 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -29,11 +29,12 @@ public final class WorldViewerServer implements AutoCloseable {
 
   private record HubMark(String id, String provinceId, int level, Vec2 point) {}
   private record RailLine(String id, int level, List<Vec2> points) {}
+  private record Frame(WorldMap map, ViewerMap viewer) {}
 
   private final WorldApplicationService app;
   private final HttpServer server;
   private final ExecutorService workers = Executors.newFixedThreadPool(4);
-  private final LinkedHashMap<String, ViewerMap> frames = new LinkedHashMap<>(4, .75f, true);
+  private final List<Frame> frames = new ArrayList<>(2);
 
   private WorldViewerServer(WorldApplicationService app, int port) throws IOException {
     this.app = app;
@@ -81,7 +82,7 @@ public final class WorldViewerServer implements AutoCloseable {
       try {
         route(exchange);
       } catch (AddressException e) {
-        error(exchange, e.code().equals("MAP_ENTITY_NOT_FOUND") ? 404 : 400, e.code(), e.getMessage());
+        error(exchange, e.code().endsWith("ENTITY_NOT_FOUND") ? 404 : 400, e.code(), e.getMessage());
       } catch (TimelineException e) {
         int status = switch (e.code()) {
           case "TIMELINE_NODE_NOT_FOUND" -> 404;
@@ -110,12 +111,26 @@ public final class WorldViewerServer implements AutoCloseable {
       case "/favicon.ico" -> exchange.sendResponseHeaders(204, -1);
       case "/viewer.css" -> resource(exchange, "viewer.css", "text/css; charset=utf-8");
       case "/viewer.js" -> resource(exchange, "viewer.js", "text/javascript; charset=utf-8");
+      case "/military.js" -> resource(exchange, "military.js", "text/javascript; charset=utf-8");
       case "/api/nodes" -> json(exchange, 200, app.tree(
           integer(query.getOrDefault("offset", "0"), "offset"),
           integer(query.getOrDefault("limit", "100"), "limit")));
       case "/api/map" -> json(exchange, 200, info(app.savedMap(query.get("node"))));
       case "/api/overview", "/api/tile" -> render(exchange, query, path.equals("/api/tile"));
       case "/api/province" -> json(exchange, 200, province(snapshot(query), NodeAddress.parse(required(query, "address"))));
+      case "/api/entity" -> {
+        SavedMap saved = snapshot(query);
+        var address = NodeAddress.parse(required(query, "address"));
+        if (!address.node().equals(saved.node())) throw new IllegalArgumentException("实体地址须与当前节点一致");
+        json(exchange, 200, app.lookup(address.canonical(), false));
+      }
+      case "/api/search" -> {
+        SavedMap saved = snapshot(query);
+        json(exchange, 200, app.search(saved.node().label(), required(query, "query"), query.get("kind"),
+            integer(query.getOrDefault("offset", "0"), "offset"),
+            integer(query.getOrDefault("limit", "25"), "limit")));
+      }
+      case "/api/units" -> json(exchange, 200, app.unitMarkers(snapshot(query).node().label()));
       case "/api/pick" -> {
         SavedMap saved = snapshot(query);
         Vec2 point = new Vec2(coordinate(query, "x"), coordinate(query, "y"));
@@ -145,7 +160,9 @@ public final class WorldViewerServer implements AutoCloseable {
         Map.entry("overviewScale", ViewerMap.overviewScale(map)), Map.entry("tileSize", ViewerMap.TILE_SIZE),
         Map.entry("maxTileLevel", ViewerMap.MAX_LEVEL), Map.entry("provinces", map.provinces().size()),
         Map.entry("states", map.states().size()), Map.entry("regions", map.strategicRegions().size()),
-        Map.entry("supplyHubs", map.supplyHubs().size()), Map.entry("railways", map.railways().size()));
+        Map.entry("supplyHubs", map.supplyHubs().size()), Map.entry("railways", map.railways().size()),
+        Map.entry("countries", saved.state().countries().countries().size()),
+        Map.entry("units", saved.state().formations().units().size()));
   }
 
   private Map<String, Object> province(SavedMap saved, NodeAddress address) {
@@ -158,6 +175,16 @@ public final class WorldViewerServer implements AutoCloseable {
     Province province = (Province) result.get("entity");
     if (province.stateId() != null) result.put("stateName", saved.map().states().get(province.stateId()).name());
     if (province.regionId() != null) result.put("regionName", saved.map().strategicRegions().get(province.regionId()).name());
+    var countries = saved.state().countries();
+    var territory = countries.territories().get(province.id());
+    if (territory != null) {
+      if (territory.owner() != null) {
+        result.put("ownerName", countries.countries().get(territory.owner().countryId()).name());
+      }
+      if (territory.controller() != null) {
+        result.put("controllerName", countries.countries().get(territory.controller().countryId()).name());
+      }
+    }
     return result;
   }
 
@@ -182,15 +209,23 @@ public final class WorldViewerServer implements AutoCloseable {
     if (tile && !ViewerMap.validTile(saved.map(), level, x, y)) {
       throw new IllegalArgumentException("瓦片超出地图范围或缩放级别");
     }
-    byte[] png = frame(saved).image(layer, level, x, y);
+    byte[] png = frame(saved).image(layer, level, x, y, saved.state().countries());
     exchange.getResponseHeaders().set("Cache-Control", "private, max-age=300");
     send(exchange, 200, "image/png", png);
   }
 
   private synchronized ViewerMap frame(SavedMap saved) {
-    ViewerMap frame = frames.computeIfAbsent(saved.stateHash(), hash -> new ViewerMap(saved.map()));
-    if (frames.size() > 2) frames.pollFirstEntry();
-    return frame;
+    for (int i = 0; i < frames.size(); i++) {
+      if (frames.get(i).map() == saved.map()) {
+        Frame found = frames.remove(i);
+        frames.addLast(found);
+        return found.viewer();
+      }
+    }
+    var next = new ViewerMap(saved.map());
+    frames.addLast(new Frame(saved.map(), next));
+    if (frames.size() > 2) frames.removeFirst();
+    return next;
   }
 
   private static Map<String, String> query(String raw) {

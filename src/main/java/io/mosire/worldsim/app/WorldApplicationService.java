@@ -3,11 +3,13 @@ package io.mosire.worldsim.app;
 import io.mosire.worldsim.address.BranchId;
 import io.mosire.worldsim.address.NodeAddress;
 import io.mosire.worldsim.address.NodeRef;
+import io.mosire.worldsim.country.CountryState;
 import io.mosire.worldsim.json.JsonCodec;
 import io.mosire.worldsim.map.MapAddressResolver;
 import io.mosire.worldsim.map.PolygonTopology;
 import io.mosire.worldsim.map.Province;
 import io.mosire.worldsim.map.WorldMap;
+import io.mosire.worldsim.orbat.MilOrgFormat;
 import io.mosire.worldsim.state.StaticWorldState;
 import io.mosire.worldsim.state.WorldChange;
 import io.mosire.worldsim.state.WorldChangeSet;
@@ -22,6 +24,7 @@ import io.mosire.worldsim.world.WorldView;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,7 +34,9 @@ import java.util.UUID;
 
 /** Transport-independent GM application service. All world operations share one locked store. */
 public final class WorldApplicationService {
-  public record SavedMap(NodeRef node, String stateHash, WorldMap map) {}
+  public record SavedMap(NodeRef node, String stateHash, StaticWorldState state) {
+    public WorldMap map() { return state.map(); }
+  }
 
   private record Applied(String requestHash, Map<String, Object> result) {}
   private record Preview(long version, String commandHash, StaticWorldState candidate, List<WorldChange> changes) {}
@@ -50,6 +55,9 @@ public final class WorldApplicationService {
   private final LinkedHashMap<NodeRef, StaticWorldState> cache = new LinkedHashMap<>(4, .75f, true) {
     @Override protected boolean removeEldestEntry(Map.Entry<NodeRef, StaticWorldState> e) { return size() > 2; }
   };
+  private final LinkedHashMap<NodeRef, WorldSearchIndex> search = new LinkedHashMap<>(4, .75f, true) {
+    @Override protected boolean removeEldestEntry(Map.Entry<NodeRef, WorldSearchIndex> e) { return size() > 2; }
+  };
 
   public WorldApplicationService(FileTimelineStore store) {
     this.store = Objects.requireNonNull(store);
@@ -61,18 +69,21 @@ public final class WorldApplicationService {
   public synchronized SavedMap savedMap(String address) {
     NodeRef ref = address == null ? defaultHead() : node(address);
     TimelineNode saved = requireNode(ref);
-    return new SavedMap(ref, saved.stateHash(), load(ref).map());
+    return new SavedMap(ref, saved.stateHash(), load(ref));
   }
 
   public synchronized Map<String, Object> overview(String address) {
     NodeRef ref = address == null ? defaultHead() : node(address);
     TimelineNode saved = requireNode(ref);
-    var map = load(ref).map();
+    var state = load(ref);
+    var map = state.map();
     Map<String, Object> result = new LinkedHashMap<>();
     result.put("worldId", store.worldId()); result.put("node", ref.label()); result.put("stateHash", saved.stateHash());
     result.put("provinces", map.provinces().size()); result.put("states", map.states().size());
     result.put("regions", map.strategicRegions().size()); result.put("supplyHubs", map.supplyHubs().size());
     result.put("railways", map.railways().size()); result.put("branches", store.branches().size());
+    result.put("countries", state.countries().countries().size());
+    result.put("units", state.formations().units().size());
     WorldProvenance.Result evidence = WorldProvenance.forNode(store, ref);
     if (evidence.document() != null) {
       result.put("provenanceSource", evidence.document().path("source"));
@@ -85,10 +96,14 @@ public final class WorldApplicationService {
   public synchronized Map<String, Object> lookup(String text, boolean includeGeometry) {
     NodeAddress address = NodeAddress.parse(text);
     StaticWorldState state = load(address.node());
+    String hash = requireNode(address.node()).stateHash();
+    if (!address.requireEntityPath().path().getFirst().equals("map")) {
+      return WorldQueries.lookup(state, address, hash);
+    }
     var resolved = MapAddressResolver.resolve(state.map(), address);
     Map<String, Object> result = new LinkedHashMap<>();
     result.put("address", address.canonical());
-    result.put("nodeHash", requireNode(address.node()).stateHash());
+    result.put("nodeHash", hash);
     result.put("kind", resolved.kind());
     result.put("stableId", resolved.stableId());
     result.put("displayName", resolved.displayName());
@@ -104,11 +119,38 @@ public final class WorldApplicationService {
     }
     WorldProvenance.Result evidence = WorldProvenance.forNode(store, address.node());
     if (resolved.value() instanceof Province p) {
+      var territory = state.countries().territories().get(p.id());
+      if (territory != null) result.put("territory", territory);
+      var units = WorldQueries.unitMarkers(state, address.node(), p.id());
+      if (!units.isEmpty()) result.put("units", units);
       var entries = evidence.provinceEvidence(p.id());
       if (!entries.isEmpty()) result.put("fieldEvidence", entries);
     }
     if (evidence.warning() != null) result.put("provenanceWarning", evidence.warning());
     return result;
+  }
+
+  public synchronized Map<String, Object> search(String address, String query, String kind, int offset, int limit) {
+    requirePage(offset, limit);
+    requireText(query, "query");
+    if (kind != null && !WorldSearchIndex.KINDS.contains(kind)) {
+      throw new IllegalArgumentException("未知的搜索类别: " + kind);
+    }
+    SavedMap saved = savedMap(address);
+    var index = search.computeIfAbsent(saved.node(), ignored -> new WorldSearchIndex(saved.state()));
+    return index.search(saved.node(), saved.stateHash(), query, kind, offset, limit);
+  }
+
+  public synchronized List<?> unitMarkers(String address) {
+    SavedMap saved = savedMap(address);
+    return WorldQueries.unitMarkers(saved.state(), saved.node(), null);
+  }
+
+  public synchronized Map<String, Object> exportMilOrg(String text) {
+    NodeAddress address = NodeAddress.parse(text);
+    var formation = WorldQueries.formation(load(address.node()), address);
+    var document = formation.document();
+    return MilOrgFormat.write(document, formation.selected() == null ? document.root() : formation.selected());
   }
 
   public synchronized Map<String, Object> tree(int offset, int limit) {
@@ -189,13 +231,14 @@ public final class WorldApplicationService {
     requireVersion(draft, expectedVersion);
     String commandHash = JsonCodec.sha256(JsonCodec.canonicalJson(commands));
     StaticWorldState candidate;
+    StaticWorldState before = draft.copy.currentState();
     List<WorldChange> changes;
     if (draft.preview != null && draft.preview.version() == draft.version
         && draft.preview.commandHash().equals(commandHash)) {
       candidate = draft.preview.candidate();
       changes = draft.preview.changes();
     } else {
-      candidate = draft.copy.currentState();
+      candidate = before;
       changes = new ArrayList<>();
       for (Map<String, Object> command : commands) {
         WorldChange change = WorldCommand.parse(command).plan(candidate);
@@ -211,12 +254,47 @@ public final class WorldApplicationService {
     } else {
       draft.preview = new Preview(draft.version, commandHash, candidate, List.copyOf(changes));
     }
-    Map<String, Object> result = Map.of("draftId", draftId, "draftVersion", draft.version,
+    Map<String, Object> result = new LinkedHashMap<>(Map.of("draftId", draftId, "draftVersion", draft.version,
         "dryRun", dryRun, "appliedCount", changes.size(), "pendingCount",
         draft.copy.pendingChangeCount() + (dryRun ? changes.size() : 0), "stateHash", candidate.contentHash(),
-        "changes", changes.stream().map(c -> c.getClass().getSimpleName()).toList());
+        "changes", changes.stream().map(c -> c.getClass().getSimpleName()).toList()));
+    Map<String, Object> territories = territoryPreview(before.countries(), candidate.countries(), changes);
+    if (!territories.isEmpty()) result.put("territory", territories);
+    result = Map.copyOf(result);
     draft.requests.put(requestId, new Applied(requestHash, result));
     return result;
+  }
+
+  private static Map<String, Object> territoryPreview(CountryState before, CountryState after, List<WorldChange> changes) {
+    var provinces = new java.util.TreeSet<String>();
+    var checked = new HashSet<List<String>>();
+    var conflicts = new ArrayList<Map<String, String>>();
+    int count = 0;
+    for (WorldChange change : changes) {
+      if (!(change instanceof WorldChange.SetTerritory op)) continue;
+      for (String id : op.provinceIds()) {
+        provinces.add(id);
+        if (!checked.add(List.of(op.field(), id))) continue;
+        String old = countryAt(before, id, op.field());
+        String next = countryAt(after, id, op.field());
+        if (old == null || old.equals(next)) continue;
+        count++;
+        if (conflicts.size() < 100) {
+          var conflict = new LinkedHashMap<>(Map.of("provinceId", id, "field", op.field(), "from", old));
+          if (next != null) conflict.put("to", next);
+          conflicts.add(Map.copyOf(conflict));
+        }
+      }
+    }
+    if (provinces.isEmpty()) return Map.of();
+    return Map.of("provinceIds", List.copyOf(provinces), "conflictCount", count, "conflicts", List.copyOf(conflicts));
+  }
+
+  private static String countryAt(CountryState state, String provinceId, String field) {
+    var territory = state.territories().get(provinceId);
+    if (territory == null) return null;
+    var assignment = field.equals("owner") ? territory.owner() : territory.controller();
+    return assignment == null ? null : assignment.countryId();
   }
 
   public synchronized Map<String, Object> save(String actor, String draftId, long expectedVersion,

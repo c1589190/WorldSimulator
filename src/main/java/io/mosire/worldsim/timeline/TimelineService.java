@@ -367,6 +367,12 @@ public final class TimelineService {
           "静态状态校验失败: " + issues.size() + " 个问题；首个: "
               + first.code() + " " + first.message());
     }
+    try {
+      state.countries().validate(state.map());
+      state.formations().validate(state.map(), state.countries());
+    } catch (IllegalArgumentException e) {
+      throw new TimelineException("TIMELINE_STATE_INVALID", e.getMessage(), e);
+    }
   }
 
   private static void requireNoNewTopologyIssues(StaticWorldState base, StaticWorldState state,

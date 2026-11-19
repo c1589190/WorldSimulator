@@ -30,9 +30,13 @@ public final class WorldView {
     String directory = "view/versions/" + version;
     Map<String, Integer> counts = new LinkedHashMap<>();
     for (var category : snapshot.chunks().entrySet()) {
+      String layer = switch (category.getKey()) {
+        case "country", "orbat" -> category.getKey();
+        default -> "map/" + category.getKey();
+      };
       int index = 0;
       for (String ref : category.getValue()) {
-        String file = directory + "/map/" + category.getKey() + "/" + String.format("%04d", index++) + ".json";
+        String file = directory + "/" + layer + "/" + String.format("%04d", index++) + ".json";
         DurableFiles.writeNew(world.resolve(file), DurableFiles.read(world.resolve(ref)));
       }
       counts.put(category.getKey(), index);

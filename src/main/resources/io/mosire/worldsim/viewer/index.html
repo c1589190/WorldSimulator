@@ -27,12 +27,20 @@
   </header>
 
   <main class="workspace">
+    <aside id="military-panel" class="military-panel" aria-labelledby="military-heading" hidden>
+      <header class="military-bar">
+        <h2 id="military-heading">军队</h2>
+        <button id="close-military" type="button" class="quiet" aria-label="关闭军队面板" title="关闭军队面板">×</button>
+      </header>
+      <div id="military-content" class="military-content"></div>
+    </aside>
     <section id="viewport" class="viewport" aria-label="世界地图">
       <canvas id="map" tabindex="0" aria-label="世界地图"
         aria-describedby="map-help">请使用支持 Canvas 的浏览器查看地图。</canvas>
-      <p id="map-help" class="visually-hidden">拖动平移，滚轮缩放，点击查看省份。也可使用方向键、加减键和 Home 键。</p>
+      <p id="map-help" class="visually-hidden">拖动平移，滚轮缩放。点击省份或兵牌查看详情。放大可展开叠牌，缩小至最低倍率时隐藏兵牌。也可使用方向键、加减键和 Home 键。</p>
       <p id="map-status" class="map-status" role="status">正在加载地图…</p>
       <p id="map-counts" class="map-counts" hidden></p>
+      <p id="unit-zoom-note" class="unit-zoom-note" role="status" hidden>放大地图可显示兵牌</p>
       <div class="zoom" role="group" aria-label="地图缩放">
         <button id="zoom-in" type="button" aria-label="放大" title="放大">+</button>
         <button id="zoom-out" type="button" aria-label="缩小" title="缩小">−</button>
@@ -48,22 +56,26 @@
           <label><input type="radio" name="layer" value="terrain" checked><span>地形</span></label>
           <label><input type="radio" name="layer" value="state"><span>州</span></label>
           <label><input type="radio" name="layer" value="region"><span>战略区域</span></label>
+          <label><input type="radio" name="layer" value="owner"><span>国家归属</span></label>
+          <label><input type="radio" name="layer" value="controller"><span>实际控制</span></label>
         </fieldset>
         <div class="overlay-picker">
           <label><input id="railways" type="checkbox"><span class="rail-key"></span>铁路示意</label>
           <label><input id="hubs" type="checkbox"><span class="hub-key"></span>补给中心</label>
+          <label><input id="units" type="checkbox" checked><span class="unit-key"></span>兵牌</label>
         </div>
       </section>
 
       <section class="pane province-pane" aria-labelledby="province-heading">
-        <h2 id="province-heading">省份</h2>
+        <h2 id="province-heading">查找</h2>
         <form id="search" role="search">
-          <label class="visually-hidden" for="province-query">省 ID 或节点地址</label>
-          <input id="province-query" maxlength="512" type="search" placeholder="省 ID 或节点地址"
+          <label class="visually-hidden" for="province-query">名称、实体 ID 或节点地址</label>
+          <input id="province-query" maxlength="512" type="search" placeholder="名称、实体 ID 或节点地址"
             autocomplete="off" spellcheck="false" required>
           <button type="submit" class="primary">定位</button>
         </form>
         <p id="search-status" class="search-status" role="status" hidden></p>
+        <ul id="search-results" class="entity-links" hidden></ul>
         <p id="empty-province" class="empty-province">点击地图查看省份。</p>
         <article id="province" hidden>
           <div class="province-toolbar">
@@ -76,7 +88,13 @@
             <div><dt>地形</dt><dd id="province-terrain"></dd></div>
             <div><dt>州</dt><dd id="province-state"></dd></div>
             <div><dt>战略区域</dt><dd id="province-region"></dd></div>
+            <div id="province-owner-row" hidden><dt>归属</dt><dd id="province-owner"></dd></div>
+            <div id="province-controller-row" hidden><dt>实际控制</dt><dd id="province-controller"></dd></div>
           </dl>
+          <div id="province-unit-section" class="province-units" hidden>
+            <h4>部署单位</h4>
+            <ul id="province-units" class="entity-links"></ul>
+          </div>
           <label for="province-address" class="address-label">节点地址</label>
           <div class="address-row">
             <input id="province-address" readonly spellcheck="false">
@@ -87,6 +105,15 @@
             <ul id="evidence-list"></ul>
           </div>
         </article>
+        <article id="entity-detail" hidden>
+          <div class="province-toolbar">
+            <span id="entity-kind" class="province-kind"></span>
+            <button id="clear-entity" type="button" class="quiet">取消选中</button>
+          </div>
+          <h3 id="entity-name"></h3>
+          <p id="entity-address" class="entity-address"></p>
+          <div id="entity-content"></div>
+        </article>
       </section>
 
       <section class="pane legend-pane" aria-labelledby="legend-heading">
@@ -95,5 +122,6 @@
       </section>
     </aside>
   </main>
+  <dialog id="formation-dialog" class="formation-dialog" aria-labelledby="formation-title"></dialog>
 </body>
 </html>

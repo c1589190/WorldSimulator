@@ -2,6 +2,7 @@ package io.mosire.worldsim.world;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JavaType;
+import io.mosire.worldsim.country.CountryState;
 import io.mosire.worldsim.json.JsonCodec;
 import io.mosire.worldsim.map.Adjacency;
 import io.mosire.worldsim.map.EntityLink;
@@ -13,6 +14,7 @@ import io.mosire.worldsim.map.StrategicRegion;
 import io.mosire.worldsim.map.SupplyHub;
 import io.mosire.worldsim.map.Vec2;
 import io.mosire.worldsim.map.WorldMap;
+import io.mosire.worldsim.orbat.OrbatState;
 import io.mosire.worldsim.state.StaticWorldState;
 import io.mosire.worldsim.timeline.TimelineException;
 
@@ -76,6 +78,8 @@ public final class SnapshotFiles {
     refs.put("railway", chunks("railway", new ArrayList<>(map.railways().values())));
     refs.put("link", chunks("link", new ArrayList<>(map.entityLinks().values())));
     refs.put("adjacency", chunks("adjacency", map.adjacencies()));
+    if (state.country() != null) refs.put("country", chunks("country", List.of(state.country())));
+    if (state.orbat() != null) refs.put("orbat", chunks("orbat", List.of(state.orbat())));
     Manifest manifest = new Manifest(VERSION, state.id(), map.id(), map.name(), map.width(), map.height(),
         state.contentHash(), refs);
     String relative = dataDirectory + "/snapshots/" + UUID.randomUUID() + "/snapshot.json";
@@ -157,11 +161,19 @@ public final class SnapshotFiles {
         keyed(readList(m, "railway", Railway.class), Railway::id),
         keyed(readList(m, "link", EntityLink.class), EntityLink::key),
         readList(m, "adjacency", Adjacency.class));
-    StaticWorldState state = new StaticWorldState(m.stateId(), map);
+    StaticWorldState state = new StaticWorldState(m.stateId(), map,
+        readOptionalDomain(m, "country", CountryState.class), readOptionalDomain(m, "orbat", OrbatState.class));
     if (!state.contentHash().equals(m.stateHash())) {
       throw new TimelineException("WORLD_SNAPSHOT_HASH_MISMATCH", "快照内容 hash 不一致: " + relative);
     }
     return state;
+  }
+
+  private <T> T readOptionalDomain(Manifest manifest, String category, Class<T> type) {
+    if (!manifest.chunks().containsKey(category)) return null;
+    List<T> values = readList(manifest, category, type);
+    if (values.size() != 1) throw new TimelineException("WORLD_SNAPSHOT_FORMAT", "领域快照数量无效: " + category);
+    return values.getFirst();
   }
 
   private <T> List<T> readList(Manifest manifest, String category, Class<T> type) {

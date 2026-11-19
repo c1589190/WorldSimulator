@@ -1,5 +1,6 @@
 package io.mosire.worldsim.app.viewer;
 
+import io.mosire.worldsim.country.CountryState;
 import io.mosire.worldsim.map.JtsGeometry;
 import io.mosire.worldsim.map.Province;
 import io.mosire.worldsim.map.Ring;
@@ -42,20 +43,22 @@ final class ViewerMap {
       "marsh", new Color(0xadc1a5), "jungle", new Color(0x90af85));
 
   enum Layer {
-    TERRAIN, STATE, REGION;
+    TERRAIN, STATE, REGION, OWNER, CONTROLLER;
 
     static Layer parse(String text) {
       return switch (text) {
         case "terrain" -> TERRAIN;
         case "state" -> STATE;
         case "region" -> REGION;
+        case "owner" -> OWNER;
+        case "controller" -> CONTROLLER;
         default -> throw new IllegalArgumentException("未知地图图层: " + text);
       };
     }
   }
 
   private record Drawing(Province province, Path2D path) {}
-  private record ImageKey(Layer layer, int level, int x, int y) {}
+  private record ImageKey(Layer layer, int level, int x, int y, CountryState politics) {}
 
   private final WorldMap map;
   private final STRtree index = new STRtree();
@@ -96,8 +99,8 @@ final class ViewerMap {
     return null;
   }
 
-  synchronized byte[] image(Layer layer, int level, int x, int y) throws IOException {
-    ImageKey key = new ImageKey(layer, level, x, y);
+  synchronized byte[] image(Layer layer, int level, int x, int y, CountryState politics) throws IOException {
+    ImageKey key = new ImageKey(layer, level, x, y, layer == Layer.OWNER || layer == Layer.CONTROLLER ? politics : null);
     byte[] cached = images.get(key);
     if (cached != null) return cached;
     byte[] png = render(key);
@@ -133,7 +136,7 @@ final class ViewerMap {
       graphics.setStroke(new BasicStroke((float) (.62 / scale)));
       for (Drawing drawing : drawings(viewport)) {
         Province province = drawing.province();
-        graphics.setColor(fill(key.layer(), province));
+        graphics.setColor(fill(key, province));
         graphics.fill(drawing.path());
         graphics.setColor(province.kind().equals("land") ? LAND_BORDER : WATER_BORDER);
         graphics.draw(drawing.path());
@@ -169,7 +172,16 @@ final class ViewerMap {
     path.closePath();
   }
 
-  private static Color fill(Layer layer, Province province) {
+  private static Color fill(ImageKey key, Province province) {
+    Layer layer = key.layer();
+    if (key.politics() != null) {
+      var territory = key.politics().territories().get(province.id());
+      var assignment = territory == null ? null : layer == Layer.OWNER ? territory.owner() : territory.controller();
+      if (assignment != null) {
+        var country = key.politics().countries().get(assignment.countryId());
+        return country.color() == null ? groupColor(country.id(), false) : Color.decode(country.color());
+      }
+    }
     if (layer == Layer.REGION && province.regionId() != null) {
       return groupColor(province.regionId(), province.kind().equals("sea"));
     }

@@ -42,6 +42,7 @@ class WorldViewerServerTest {
         String query = "?node=main-0&hash=" + genesis.stateHash();
         assertEquals(200, get(http, base + "/").statusCode());
         assertEquals(200, get(http, base + "/viewer.js").statusCode());
+        assertEquals(200, get(http, base + "/military.js").statusCode());
         assertEquals(404, get(http, base + "/world/world.json").statusCode());
         var post = HttpRequest.newBuilder(URI.create(base + "/api/map"))
             .POST(HttpRequest.BodyPublishers.noBody()).timeout(Duration.ofSeconds(5)).build();

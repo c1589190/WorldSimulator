@@ -1,21 +1,37 @@
 package io.mosire.worldsim.state;
 
+import io.mosire.worldsim.country.CountryState;
 import io.mosire.worldsim.json.JsonCodec;
 import io.mosire.worldsim.map.WorldMap;
+import io.mosire.worldsim.orbat.OrbatState;
 
 import java.util.Objects;
 
-/** 时间线保存的静态世界状态。首版只包含地图；ORBAT/INFO/动态状态后续扩展 ChangeSet。 */
-public record StaticWorldState(String id, WorldMap map) {
+/** Saved world state. Empty optional domains preserve the original map-only canonical bytes. */
+public record StaticWorldState(String id, WorldMap map, CountryState country, OrbatState orbat) {
   public StaticWorldState {
     if (id == null || id.isBlank()) {
       throw new IllegalArgumentException("StaticWorldState.id 不得为空白");
     }
     Objects.requireNonNull(map, "map");
+    if (CountryState.EMPTY.equals(country)) country = null;
+    if (OrbatState.EMPTY.equals(orbat)) orbat = null;
+  }
+
+  public StaticWorldState(String id, WorldMap map) {
+    this(id, map, null, null);
   }
 
   public StaticWorldState withMap(WorldMap next) {
-    return new StaticWorldState(id, next);
+    return new StaticWorldState(id, next, country, orbat);
+  }
+
+  public CountryState countries() {
+    return country == null ? CountryState.EMPTY : country;
+  }
+
+  public OrbatState formations() {
+    return orbat == null ? OrbatState.EMPTY : orbat;
   }
 
   public String canonicalJson() {

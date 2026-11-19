@@ -3,6 +3,8 @@ package io.mosire.worldsim.state;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.databind.JsonNode;
+import io.mosire.worldsim.address.NodeAddress;
+import io.mosire.worldsim.country.CountryState;
 import io.mosire.worldsim.map.Adjacency;
 import io.mosire.worldsim.map.EntityLink;
 import io.mosire.worldsim.map.Province;
@@ -10,14 +12,17 @@ import io.mosire.worldsim.map.Railway;
 import io.mosire.worldsim.map.State;
 import io.mosire.worldsim.map.StrategicRegion;
 import io.mosire.worldsim.map.SupplyHub;
+import io.mosire.worldsim.orbat.OrbatDocument;
+import io.mosire.worldsim.orbat.OrbatState;
 
 import java.util.List;
 import java.util.Map;
 import java.util.LinkedHashMap;
 import java.util.Collections;
 import java.util.Set;
+import java.util.HashSet;
 
-/** 静态地图的增量操作。首版只覆盖静态地图；后续 ORBAT/INFO/动态模块各自扩展自己的 ChangeSet。 */
+/** Persisted operations across the world domains. */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "op")
 @JsonSubTypes({
     @JsonSubTypes.Type(value = WorldChange.PutProvince.class, name = "putProvince"),
@@ -33,7 +38,12 @@ import java.util.Set;
     @JsonSubTypes.Type(value = WorldChange.RemoveRailway.class, name = "removeRailway"),
     @JsonSubTypes.Type(value = WorldChange.PutEntityLink.class, name = "putEntityLink"),
     @JsonSubTypes.Type(value = WorldChange.RemoveEntityLink.class, name = "removeEntityLink"),
-    @JsonSubTypes.Type(value = WorldChange.ReplaceAdjacencies.class, name = "replaceAdjacencies")
+    @JsonSubTypes.Type(value = WorldChange.ReplaceAdjacencies.class, name = "replaceAdjacencies"),
+    @JsonSubTypes.Type(value = WorldChange.PutCountry.class, name = "putCountry"),
+    @JsonSubTypes.Type(value = WorldChange.SetTerritory.class, name = "setTerritory"),
+    @JsonSubTypes.Type(value = WorldChange.PutOrbatDocument.class, name = "putOrbatDocument"),
+    @JsonSubTypes.Type(value = WorldChange.PutUnit.class, name = "putUnit"),
+    @JsonSubTypes.Type(value = WorldChange.DeployUnit.class, name = "deployUnit")
 })
 public sealed interface WorldChange permits
     WorldChange.PutProvince,
@@ -49,7 +59,12 @@ public sealed interface WorldChange permits
     WorldChange.RemoveRailway,
     WorldChange.PutEntityLink,
     WorldChange.RemoveEntityLink,
-    WorldChange.ReplaceAdjacencies {
+    WorldChange.ReplaceAdjacencies,
+    WorldChange.PutCountry,
+    WorldChange.SetTerritory,
+    WorldChange.PutOrbatDocument,
+    WorldChange.PutUnit,
+    WorldChange.DeployUnit {
 
   record PutProvince(Province province) implements WorldChange {
     public PutProvince { requireValue(province, "province"); }
@@ -125,6 +140,41 @@ public sealed interface WorldChange permits
     public ReplaceAdjacencies {
       requireValue(adjacencies, "adjacencies");
       adjacencies = List.copyOf(adjacencies);
+    }
+  }
+
+  record PutCountry(CountryState.Country country) implements WorldChange {
+    public PutCountry { requireValue(country, "country"); }
+  }
+
+  record SetTerritory(List<String> provinceIds, String field, CountryState.Assignment assignment)
+      implements WorldChange {
+    public SetTerritory {
+      requireValue(provinceIds, "provinceIds");
+      provinceIds = List.copyOf(provinceIds);
+      if (provinceIds.isEmpty() || new HashSet<>(provinceIds).size() != provinceIds.size()) {
+        throw new IllegalArgumentException("归属修改需要不重复的省 ID");
+      }
+      provinceIds.forEach(NodeAddress::requireSegment);
+      if (!"owner".equals(field) && !"controller".equals(field)) {
+        throw new IllegalArgumentException("归属字段须为 owner 或 controller");
+      }
+    }
+  }
+
+  record PutOrbatDocument(OrbatDocument document) implements WorldChange {
+    public PutOrbatDocument { requireValue(document, "document"); }
+  }
+
+  record PutUnit(OrbatState.Unit unit) implements WorldChange {
+    public PutUnit { requireValue(unit, "unit"); }
+  }
+
+  record DeployUnit(String unitId, String provinceId, Evidence evidence) implements WorldChange {
+    public DeployUnit {
+      NodeAddress.requireSegment(unitId);
+      if (provinceId != null) NodeAddress.requireSegment(provinceId);
+      requireValue(evidence, "evidence");
     }
   }
 

@@ -26,25 +26,28 @@ public record NodeAddress(NodeRef node, List<String> path) {
   public NodeAddress {
     Objects.requireNonNull(node, "node");
     path = List.copyOf(Objects.requireNonNull(path, "path"));
-    for (String segment : path) {
-      if (segment == null || segment.isBlank()) {
-        throw new AddressException("ADDRESS_SEGMENT_BLANK", "节点地址的路径段不得为空白: " + path);
-      }
-      if (segment.chars().anyMatch(NodeAddress::isAddressWhitespace)) {
-        throw new AddressException("ADDRESS_SEGMENT_WHITESPACE", "节点地址的路径段不得含空白: " + segment);
-      }
-      if (segment.indexOf('/') >= 0 || segment.indexOf('\\') >= 0) {
-        throw new AddressException("ADDRESS_SEGMENT_SLASH", "节点地址的路径段不得含 '/' 或 '\\\\': " + segment);
-      }
-      if (segment.equals(".") || segment.equals("..")) {
-        throw new AddressException("ADDRESS_SEGMENT_DOT", "节点地址的路径段不得为 '.' / '..': " + segment);
-      }
-    }
+    path.forEach(NodeAddress::requireSegment);
     int fullLength = node.label().length();
     for (String segment : path) fullLength += 1 + segment.length();
     if (fullLength > MAX_LENGTH) {
       throw new AddressException("ADDRESS_TOO_LONG", "节点地址过长（上限 " + MAX_LENGTH + "）: " + fullLength);
     }
+  }
+
+  public static String requireSegment(String segment) {
+    if (segment == null || segment.isBlank()) {
+      throw new AddressException("ADDRESS_SEGMENT_BLANK", "节点地址的路径段不得为空白");
+    }
+    if (segment.chars().anyMatch(NodeAddress::isAddressWhitespace)) {
+      throw new AddressException("ADDRESS_SEGMENT_WHITESPACE", "节点地址的路径段不得含空白: " + segment);
+    }
+    if (segment.indexOf('/') >= 0 || segment.indexOf('\\') >= 0) {
+      throw new AddressException("ADDRESS_SEGMENT_SLASH", "节点地址的路径段不得含 '/' 或 '\\\\': " + segment);
+    }
+    if (segment.equals(".") || segment.equals("..")) {
+      throw new AddressException("ADDRESS_SEGMENT_DOT", "节点地址的路径段不得为 '.' / '..': " + segment);
+    }
+    return segment;
   }
 
   public static NodeAddress parse(String text) {

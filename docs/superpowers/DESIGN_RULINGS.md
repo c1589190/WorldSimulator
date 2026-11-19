@@ -1,6 +1,6 @@
 # DESIGN_RULINGS.md —— 设计裁定索引
 
-> **状态**：有效（2026-11-17 更新）
+> **状态**：有效（2026-11-19 更新）
 > **权威原稿**：[`specs/2026-11-17-worldsim-architecture-design-source.md`](specs/2026-11-17-worldsim-architecture-design-source.md)
 > **说明**：本文件只做索引；正文在原稿/专题设计中。用户原话逐字保留在原稿，不在此改写。
 
@@ -24,6 +24,13 @@
 | D-016 | 2026-11-17 | 用户选择（第六轮） | 当前社区地图源选用 Magna Europa Reforged（欧洲、HOI4 1.19、完整 region/supply/railway）；Mappa Mundi 降为历史对照 | 原稿 §10、`reports/2026-11-17-magna-europa-import-report.md` | 有效 |
 | D-017 | 2026-11-17 | 用户原话（world 目录） | 正常启动检测并只从运行目录的 `world/` 加载世界；强调内容可查看性，按同一世界单实例评估存储 | 原稿 §11、专题设计 §11 | 有效；SQL 范围已由 D-018 裁定 |
 | D-018 | 2026-11-17 | 用户选择（world 存储） | 选择 JSON/文本为权威世界存档，SQLite 仅可作可删除重建的索引；按提出的目录、存储、迁移和 MCP 顺序实现 | 原稿 §12、专题设计 §11 | 有效；本阶段已实现，当前范围见 STATUS |
+| D-019 | 2026-11-19 | 用户原话 | 地名与地理索引、国家等实体查询和军队单位沿用同一严格节点地址体系 | [原稿 §13](specs/2026-11-17-worldsim-architecture-design-source.md) | 有效，补充原稿 §6.1 第 4 条 |
+| D-020 | 2026-11-19 | 用户选择 | 从 `main-0` 分叉做 1936 葡萄牙样例 | [原稿 §14](specs/2026-11-17-worldsim-architecture-design-source.md) | 有效 |
+| D-021 | 2026-11-19 | 用户原话 | 地图引用抽象单位地址，具体模块解释单位，理想与实际编制采用通用格式 | [原稿 §14](specs/2026-11-17-worldsim-architecture-design-source.md)、[实施契约](specs/2026-11-19-unit-address-and-orbat-format.md) | 有效 |
+| D-022 | 2026-11-19 | 用户原话 | 地图使用大兵牌，缩小聚合、放大展开，选中时在左侧独立显示编制 | [原稿 §15](specs/2026-11-17-worldsim-architecture-design-source.md)、[查看器专题](specs/2026-11-19-readonly-map-viewer.md) | 有效 |
+| D-023 | 2026-11-19 | 用户原话 | 略缩小兵牌，缩小时先聚合再隐藏，用同地点的多个单位验收 | [原稿 §16](specs/2026-11-17-worldsim-architecture-design-source.md)、[查看器专题](specs/2026-11-19-readonly-map-viewer.md) | 有效，补充 D-022 |
+| D-024 | 2026-11-19 | 用户原话 | 同地的同级顶层单位分别出牌，下属编制在各顶层单位内部显示，再缩小兵牌 | [原稿 §17](specs/2026-11-17-worldsim-architecture-design-source.md)、[查看器专题](specs/2026-11-19-readonly-map-viewer.md) | 有效，细化 D-023 的验收样例 |
+| D-025 | 2026-11-19 | 用户原话 | 在浏览器内独立窗口用结构图查看顶层单位的编制 | [原稿 §18](specs/2026-11-17-worldsim-architecture-design-source.md)、[查看器专题](specs/2026-11-19-readonly-map-viewer.md) | 有效，调整 D-022 的编制查看位置和布局 |
 
 ## 仍待裁定的工程问题
 

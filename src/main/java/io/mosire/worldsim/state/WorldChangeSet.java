@@ -22,7 +22,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * 一个有顺序的静态地图增量。多个写操作按调用顺序 append 到同一个 ChangeSet；
+ * 一个有顺序的世界增量。多个写操作按调用顺序 append 到同一个 ChangeSet；
  * 保存时作为一个节点整体写入，不做 undo/revision。
  */
 public record WorldChangeSet(List<WorldChange> changes) {
@@ -61,15 +61,33 @@ public record WorldChangeSet(List<WorldChange> changes) {
 
   public StaticWorldState apply(StaticWorldState base) {
     Objects.requireNonNull(base, "base");
-    Map<String, Province> provinces = new LinkedHashMap<>(base.map().provinces());
-    Map<String, State> states = new LinkedHashMap<>(base.map().states());
-    Map<String, StrategicRegion> regions = new LinkedHashMap<>(base.map().strategicRegions());
-    Map<String, SupplyHub> hubs = new LinkedHashMap<>(base.map().supplyHubs());
-    Map<String, Railway> railways = new LinkedHashMap<>(base.map().railways());
-    Map<String, EntityLink> entityLinks = new LinkedHashMap<>(base.map().entityLinks());
-    List<Adjacency> adjacencies = new ArrayList<>(base.map().adjacencies());
-
+    var country = base.countries();
+    var orbat = base.formations();
+    List<WorldChange> mapChanges = new ArrayList<>();
     for (WorldChange change : changes) {
+      switch (change) {
+        case WorldChange.PutCountry op -> country = country.withCountry(op.country());
+        case WorldChange.SetTerritory op -> country = country.withTerritory(op.provinceIds(), op.field(), op.assignment());
+        case WorldChange.PutOrbatDocument op -> orbat = orbat.withDocument(op.document());
+        case WorldChange.PutUnit op -> orbat = orbat.withUnit(op.unit());
+        case WorldChange.DeployUnit op -> orbat = orbat.deploy(op.unitId(), op.provinceId(), op.evidence());
+        default -> mapChanges.add(change);
+      }
+    }
+    WorldMap map = mapChanges.isEmpty() ? base.map() : applyMap(base.map(), mapChanges);
+    return new StaticWorldState(base.id(), map, country, orbat);
+  }
+
+  private static WorldMap applyMap(WorldMap base, List<WorldChange> mapChanges) {
+    Map<String, Province> provinces = new LinkedHashMap<>(base.provinces());
+    Map<String, State> states = new LinkedHashMap<>(base.states());
+    Map<String, StrategicRegion> regions = new LinkedHashMap<>(base.strategicRegions());
+    Map<String, SupplyHub> hubs = new LinkedHashMap<>(base.supplyHubs());
+    Map<String, Railway> railways = new LinkedHashMap<>(base.railways());
+    Map<String, EntityLink> entityLinks = new LinkedHashMap<>(base.entityLinks());
+    List<Adjacency> adjacencies = new ArrayList<>(base.adjacencies());
+
+    for (WorldChange change : mapChanges) {
       switch (change) {
         case WorldChange.PutProvince op -> provinces.put(op.province().id(), op.province());
         case WorldChange.PatchProvince op -> {
@@ -157,11 +175,11 @@ public record WorldChangeSet(List<WorldChange> changes) {
           adjacencies.clear();
           adjacencies.addAll(op.adjacencies());
         }
+        default -> throw new IllegalArgumentException("不是地图变更: " + change);
       }
     }
-    WorldMap next = new WorldMap(base.map().id(), base.map().name(), base.map().width(), base.map().height(),
+    return new WorldMap(base.id(), base.name(), base.width(), base.height(),
         provinces, states, regions, hubs, railways, entityLinks, adjacencies);
-    return base.withMap(next);
   }
 
   private static void removeLinksTargeting(Map<String, EntityLink> links, String category, String targetId) {

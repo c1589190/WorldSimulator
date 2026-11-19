@@ -1,4 +1,6 @@
-'use strict';
+import {
+  COUNTER_HIDE_ZOOM, drawUnitCounters, layoutUnitCounters, renderMilitary, showFormation, STACK_ZOOM
+} from './military.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('map');
@@ -7,22 +9,33 @@ const nodes = $('nodes');
 const queryInput = $('province-query');
 const railwayToggle = $('railways');
 const hubToggle = $('hubs');
+const unitToggle = $('units');
+const unitZoomNote = $('unit-zoom-note');
+const militaryPanel = $('military-panel');
+const formationDialog = $('formation-dialog');
+const noUnitSelection = new Set();
 const terrainNames = {
   plains: '平原', forest: '森林', hills: '丘陵', mountain: '山地', desert: '沙漠',
   urban: '城市', marsh: '沼泽', jungle: '丛林', unknown: '未知', ocean: '海洋', lakes: '湖泊'
 };
 const kindNames = { land: '陆地', sea: '海域', lake: '湖泊' };
+const entityNames = { province: '省份', state: '州', region: '战略区域', country: '国家',
+  unit: '单位', orbatDocument: '编制文档', orbatNode: '编制节点' };
 const number = new Intl.NumberFormat('zh-CN');
 const timeline = new Map();
 const tileLimit = 96;
+const minimumMapZoom = .8;
 
 let view;
 let mapRequest;
 let nodeListRequest;
 let selectionRequest;
+let armyRequest;
 let nextOffset = 0;
 let layer = 'terrain';
 let selection;
+let armyState;
+let unitHits = [];
 let drag;
 let drawingScheduled = false;
 let width = 1;
@@ -96,6 +109,8 @@ function updateNodes() {
 async function loadMap(node) {
   mapRequest?.abort();
   selectionRequest?.abort();
+  armyRequest?.abort();
+  if (armyState) setArmyState(null);
   const request = new AbortController();
   mapRequest = request;
   status('正在加载地图…');
@@ -107,7 +122,13 @@ async function loadMap(node) {
       for (const entry of [...view.overview.values(), ...view.tiles.values()]) discardImage(entry);
     }
     view = { info, overview: new Map(), tiles: new Map(), requests: new AbortController() };
+    const location = new URL(window.location.href);
+    if (node || location.searchParams.has('node')) {
+      location.searchParams.set('node', info.node);
+      window.history.replaceState(null, '', location);
+    }
     selectProvince(null);
+    clearSearchResults();
     searchStatus();
     $('map-name').textContent = info.mapName;
     $('map-counts').textContent = number.format(info.provinces) + ' 省  ·  '
@@ -116,6 +137,7 @@ async function loadMap(node) {
     updateNodes();
     fitMap();
     loadLogistics();
+    loadUnits();
     return view;
   } catch (error) {
     if (!request.signal.aborted) {
@@ -164,31 +186,47 @@ function fitMap() {
 
 function zoom(factor, x = width / 2, y = height / 2) {
   if (!view) return;
-  const next = between(scale * factor, fitScale(), maxScale());
+  const next = between(scale * factor, fitScale() * minimumMapZoom, maxScale());
+  if (next === scale) return;
   left = x - (x - left) * next / scale;
   top = y - (y - top) * next / scale;
   scale = next;
   containMap();
 }
 
+function centerMap(point, minimumZoom) {
+  scale = Math.max(scale, Math.min(maxScale(), fitScale() * minimumZoom));
+  left = width / 2 - point.x * scale;
+  top = height / 2 - point.y * scale;
+  containMap();
+}
+
 function resize() {
   const bounds = canvas.getBoundingClientRect();
-  const previousWidth = width;
-  const previousHeight = height;
-  const fitted = view && scale <= fitScale() * 1.001;
-  width = Math.max(1, bounds.width);
-  height = Math.max(1, bounds.height);
-  density = Math.min(2, window.devicePixelRatio || 1);
+  const nextWidth = Math.max(1, bounds.width);
+  const nextHeight = Math.max(1, bounds.height);
+  const nextDensity = Math.min(2, window.devicePixelRatio || 1);
+  if (width === nextWidth && height === nextHeight && density === nextDensity
+      && canvas.width === Math.round(nextWidth * nextDensity)
+      && canvas.height === Math.round(nextHeight * nextDensity)) return;
+  const previousZoom = view ? scale / fitScale() : 1;
+  const centerX = (width / 2 - left) / scale;
+  const centerY = (height / 2 - top) / scale;
+  width = nextWidth;
+  height = nextHeight;
+  density = nextDensity;
   canvas.width = Math.round(width * density);
   canvas.height = Math.round(height * density);
-  if (view && fitted) {
+  if (!view) {
+    scheduleDraw();
+  } else if (Math.abs(previousZoom - 1) <= .001) {
     fitMap();
-  } else if (view) {
-    left += (width - previousWidth) / 2;
-    top += (height - previousHeight) / 2;
-    zoom(1);
+  } else {
+    scale = Math.min(fitScale() * previousZoom, maxScale());
+    left = width / 2 - centerX * scale;
+    top = height / 2 - centerY * scale;
+    containMap();
   }
-  scheduleDraw();
 }
 
 function image(cache, key, source) {
@@ -223,6 +261,11 @@ function discardImage(entry) {
 
 function draw() {
   drawingScheduled = false;
+  unitHits = [];
+  const relativeZoom = view ? scale / fitScale() : 1;
+  const belowCounterZoom = relativeZoom < COUNTER_HIDE_ZOOM;
+  unitZoomNote.toggleAttribute('hidden', !view?.info.units || !unitToggle.checked || !belowCounterZoom);
+  if (belowCounterZoom || !unitToggle.checked) updateCounterHover();
   context.setTransform(density, 0, 0, density, 0, 0);
   context.fillStyle = '#122630';
   context.fillRect(0, 0, width, height);
@@ -249,6 +292,7 @@ function draw() {
   drawLogistics();
   drawSelection();
   context.restore();
+  if (!belowCounterZoom) drawUnits(relativeZoom);
 }
 
 function drawTiles() {
@@ -339,7 +383,35 @@ function drawSelection() {
   context.stroke(selection.path);
 }
 
+async function loadUnits() {
+  const target = view;
+  if (!target?.info.units || target.units || target.loadingUnits || !unitToggle.checked) return;
+  target.loadingUnits = true;
+  try {
+    const units = await json('/api/units', version(target), target.requests.signal);
+    if (view !== target) return;
+    target.units = units;
+    scheduleDraw();
+  } catch (error) {
+    if (!target.requests.signal.aborted) status('单位图层加载失败 · ' + error.message);
+  } finally {
+    target.loadingUnits = false;
+  }
+}
+
+function drawUnits(relativeZoom) {
+  if (!unitToggle.checked || !view.units?.length) return;
+  const camera = [left, top, width, height, scale];
+  if (!view.counterLayout || camera.some((value, index) => value !== view.counterLayout.camera[index])) {
+    view.counterLayout = { camera, hits: layoutUnitCounters(view.units,
+      { left, top, width, height, scale, zoom: relativeZoom }) };
+  }
+  unitHits = view.counterLayout.hits;
+  drawUnitCounters(context, unitHits, armyState?.selected || noUnitSelection);
+}
+
 function selectProvince(result) {
+  $('entity-detail').hidden = true;
   $('province').hidden = !result;
   $('empty-province').hidden = Boolean(result);
   selection = null;
@@ -371,6 +443,13 @@ function selectProvince(result) {
     $('province-terrain').textContent = terrainNames[province.terrain] || province.terrain;
     $('province-state').textContent = result.stateName || province.stateId || '—';
     $('province-region').textContent = result.regionName || province.regionId || '—';
+    $('province-owner-row').hidden = !view.info.countries;
+    $('province-controller-row').hidden = !view.info.countries;
+    $('province-owner').textContent = result.ownerName || '未知';
+    $('province-controller').textContent = result.controllerName || '未知';
+    const units = result.units || [];
+    $('province-unit-section').hidden = units.length === 0;
+    $('province-units').replaceChildren(...units.map((unit) => listLink(unit.name, unit.address, false)));
     $('province-address').value = result.address;
     showEvidence(result);
   }
@@ -385,6 +464,8 @@ function showEvidence(result) {
     return [field, state, entry.source, confidence].filter(Boolean).join(' · ');
   });
   if (result.provenanceWarning) entries.push(result.provenanceWarning);
+  if (result.territory?.owner) entries.push('归属 · ' + evidenceText(result.territory.owner.evidence));
+  if (result.territory?.controller) entries.push('控制 · ' + evidenceText(result.territory.controller.evidence));
   $('evidence').hidden = entries.length === 0;
   $('evidence-list').replaceChildren(...entries.map((text) => {
     const item = document.createElement('li');
@@ -393,12 +474,217 @@ function showEvidence(result) {
   }));
 }
 
+function evidenceText(evidence) {
+  if (!evidence) return '来源未知';
+  const description = { known: '有来源', inferred: '推断', estimated: '估计', unknown: '未知',
+    'legacy-ambiguous': '旧数据待核对' }[evidence.status] || evidence.status;
+  return [description, evidence.source, evidence.date,
+    evidence.confidence == null ? null : '置信度 ' + evidence.confidence].filter(Boolean).join(' · ');
+}
+
+function linkButton(label, address, center = true) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'entity-link';
+  button.textContent = label;
+  button.addEventListener('click', () => openEntity(address, center));
+  return button;
+}
+
+function listLink(label, address, center = true) {
+  const item = document.createElement('li');
+  item.append(linkButton(label, address, center));
+  return item;
+}
+
+function clearSearchResults() {
+  $('search-results').replaceChildren();
+  $('search-results').hidden = true;
+}
+
+function textElement(tag, text, className) {
+  const element = document.createElement(tag);
+  element.textContent = text;
+  if (className) element.className = className;
+  return element;
+}
+
+function evidenceLine(evidence) {
+  if (!evidence) return textElement('p', '来源未知', 'entity-source');
+  const line = textElement('p', evidenceText({ ...evidence, source: null }), 'entity-source');
+  const source = evidence.source;
+  if (!source) return line;
+  const url = /^https?:\/\/[^\s]+/.exec(source)?.[0];
+  if (url) {
+    const link = textElement('a', '资料来源');
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.title = source;
+    line.append(' · ', link);
+  } else {
+    line.append(' · ', source);
+  }
+  return line;
+}
+
+function setArmyState(state) {
+  if (formationDialog.open) formationDialog.close();
+  const changed = Boolean(armyState) !== Boolean(state);
+  const content = $('military-content');
+  armyState = state;
+  militaryPanel.hidden = !state;
+  militaryPanel.parentElement.classList.toggle('military-open', Boolean(state));
+  if (state) {
+    const address = state.address || state.result?.address;
+    state.selected = new Set(address ? [address] : state.roster?.units.map(unit => unit.address));
+    renderMilitary(content, state, {
+      evidence: evidenceLine,
+      openFormation: () => showFormation(formationDialog, state, evidenceLine),
+      locate: (point) => {
+        unitToggle.checked = true;
+        loadUnits();
+        const minimum = state.result ? STACK_ZOOM + .65 : Math.max(STACK_ZOOM + .65, scale / fitScale() * 1.4);
+        centerMap(point, minimum);
+      },
+      selectUnit: (address) => openEntity(address, false, { roster: state.roster }),
+      selectProvince: (address) => openEntity(address, false),
+      selectCountry: (address) => openEntity(address, false),
+      backToRoster: () => {
+        armyRequest?.abort();
+        setArmyState({ roster: state.roster });
+      }
+    });
+    content.scrollTop = 0;
+  } else {
+    content.replaceChildren();
+  }
+  if (changed) resize();
+  scheduleDraw();
+}
+
+function selectCounter(counter) {
+  selectionRequest?.abort();
+  if (counter.units.length === 1) {
+    const address = counter.units[0].address;
+    const roster = armyState?.roster?.units.some(unit => unit.address === address) ? armyState.roster : undefined;
+    openEntity(address, false, { roster });
+    return;
+  }
+  armyRequest?.abort();
+  const point = counter.units.reduce((center, unit) => ({
+    x: center.x + unit.point.x / counter.units.length,
+    y: center.y + unit.point.y / counter.units.length
+  }), { x: 0, y: 0 });
+  setArmyState({ roster: { units: counter.units, point } });
+}
+
+async function openEntity(address, center = true, { roster } = {}) {
+  if (!view || mapRequest) return;
+  const parts = address.split('/');
+  if (parts.length < 2 || parts.some((part) => !part)) {
+    searchStatus('请输入完整的实体节点地址。', true);
+    return;
+  }
+  if (parts[0] !== view.info.node && !await loadMap(parts[0])) return;
+  clearSearchResults();
+  if (parts[1] === 'map' && parts[2] === 'province') {
+    await findProvince('/api/province', { address }, center);
+    return;
+  }
+  const target = view;
+  const request = new AbortController();
+  const military = parts[1] === 'orbat';
+  if (military) {
+    armyRequest?.abort();
+    armyRequest = request;
+    setArmyState({ address, roster, message: '正在读取编制…' });
+  } else {
+    selectionRequest?.abort();
+    selectionRequest = request;
+  }
+  searchStatus();
+  const lookup = (entityAddress) => json('/api/entity', { ...version(target), address: entityAddress }, request.signal);
+  try {
+    const result = await lookup(address);
+    const content = [];
+    if (result.kind === 'unit') {
+      const [actual, ideal] = await Promise.all([result.actualAddress, result.idealAddress]
+        .map(async (ref) => ref ? (await lookup(ref)).entity : null));
+      if (view !== target || request.signal.aborted) return;
+      setArmyState({ result, actual, ideal, roster });
+      if (center && result.point) centerMap(result.point, STACK_ZOOM + .65);
+      return;
+    }
+    if (view !== target || request.signal.aborted) return;
+    if (result.kind === 'orbatDocument' || result.kind === 'orbatNode') {
+      const tree = result.kind === 'orbatDocument' ? result.entity.root : result.entity;
+      const state = { result, [result.role]: tree };
+      setArmyState(state);
+      showFormation(formationDialog, state, evidenceLine);
+      return;
+    }
+    if (result.kind === 'country') {
+      const control = result.controlledProvinces > 0
+        ? '已记录控制 ' + number.format(result.controlledProvinces) + ' 省' : '控制范围暂无记录';
+      content.push(textElement('p', '已记录归属 ' + number.format(result.ownedProvinces) + ' 省 · ' + control));
+      content.push(evidenceLine(result.entity.evidence));
+      if (result.capitalAddress) content.push(linkButton('定位首都', result.capitalAddress));
+    } else if (result.entity.provinceIds) {
+      const provinceIds = result.entity.provinceIds;
+      content.push(textElement('p', '覆盖 ' + number.format(provinceIds.length) + ' 省'));
+      if (provinceIds.length) {
+        content.push(linkButton('查看成员省 ' + provinceIds[0], target.info.node + '/map/province/' + provinceIds[0]));
+      }
+    }
+    selectProvince(null);
+    $('empty-province').hidden = true;
+    $('entity-detail').hidden = false;
+    $('entity-kind').textContent = entityNames[result.kind] || result.kind;
+    $('entity-name').textContent = result.displayName;
+    $('entity-address').textContent = result.address;
+    $('entity-content').replaceChildren(...content);
+    if (center && result.point) centerMap(result.point, 4);
+  } catch (error) {
+    if (request.signal.aborted) return;
+    if (military) setArmyState({ address, roster, message: '读取编制失败 · ' + error.message });
+    else searchStatus(error.message, true);
+  }
+}
+
+async function searchEntities(query) {
+  const target = view;
+  selectionRequest?.abort();
+  const request = new AbortController();
+  selectionRequest = request;
+  clearSearchResults();
+  searchStatus();
+  try {
+    const page = await json('/api/search', { ...version(target), query, limit: 25 }, request.signal);
+    if (view !== target || request.signal.aborted) return;
+    if (page.total === 1) {
+      await openEntity(page.matches[0].address);
+    } else if (page.total === 0) {
+      searchStatus('没有找到匹配的实体。');
+    } else {
+      const results = page.matches.map((match) => listLink(
+        [match.displayName, entityNames[match.kind], match.context].filter(Boolean).join(' · '), match.address));
+      $('search-results').replaceChildren(...results);
+      $('search-results').hidden = false;
+      searchStatus(page.total > results.length ? '显示前 ' + results.length + ' 项，共 ' + page.total + ' 项。' : '请选择匹配项。');
+    }
+  } catch (error) {
+    if (!request.signal.aborted) searchStatus(error.message, true);
+  }
+}
+
 async function findProvince(path, parameters, center = false) {
   const target = view;
   if (!target || mapRequest) return;
   selectionRequest?.abort();
   const request = new AbortController();
   selectionRequest = request;
+  clearSearchResults();
   searchStatus();
   try {
     const result = await json(path, { ...version(target), ...parameters }, request.signal);
@@ -431,7 +717,12 @@ function showLegend() {
   } else {
     const note = document.createElement('li');
     note.className = 'legend-note';
-    note.textContent = layer === 'state' ? '陆地颜色按省份所属的州分组。' : '颜色按省份所属的战略区域分组。';
+    note.textContent = {
+      state: '陆地颜色按省份所属的州分组。',
+      region: '颜色按省份所属的战略区域分组。',
+      owner: '有归属记录的省按国家着色。',
+      controller: '有控制记录的省按实际控制方着色。'
+    }[layer];
     items.push(note);
   }
   $('legend').replaceChildren(...items);
@@ -442,6 +733,19 @@ function cursor(event) {
   return { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
 }
 
+function counterAt(point) {
+  if (!unitToggle.checked || !view || scale / fitScale() < COUNTER_HIDE_ZOOM) return undefined;
+  return unitHits.findLast((hit) => Math.abs(hit.x - point.x) <= hit.width / 2
+    && Math.abs(hit.y - point.y) <= hit.height / 2);
+}
+
+function updateCounterHover(counter) {
+  canvas.classList.toggle('over-counter', Boolean(counter));
+  const title = counter?.units.length > 1 ? number.format(counter.units.length) + ' 个部署单位'
+    : counter?.units[0]?.name || '';
+  if (canvas.title !== title) canvas.title = title;
+}
+
 canvas.addEventListener('pointerdown', (event) => {
   if (!view || !event.isPrimary || event.button !== 0) return;
   drag = { ...cursor(event), left, top, moved: false, pointerId: event.pointerId };
@@ -449,8 +753,12 @@ canvas.addEventListener('pointerdown', (event) => {
   canvas.focus({ preventScroll: true });
 });
 canvas.addEventListener('pointermove', (event) => {
-  if (!drag || event.pointerId !== drag.pointerId) return;
   const point = cursor(event);
+  if (!drag) {
+    updateCounterHover(counterAt(point));
+    return;
+  }
+  if (event.pointerId !== drag.pointerId) return;
   const dx = point.x - drag.x;
   const dy = point.y - drag.y;
   if (!drag.moved && Math.hypot(dx, dy) < 4) return;
@@ -460,11 +768,18 @@ canvas.addEventListener('pointermove', (event) => {
   top = drag.top + dy;
   containMap();
 });
+canvas.addEventListener('pointerleave', () => updateCounterHover());
 canvas.addEventListener('pointerup', (event) => {
   if (!drag || event.pointerId !== drag.pointerId) return;
   if (!drag.moved) {
     const point = cursor(event);
-    findProvince('/api/pick', { x: (point.x - left) / scale, y: (point.y - top) / scale });
+    const counter = counterAt(point);
+    if (counter) selectCounter(counter);
+    else {
+      const location = { x: (point.x - left) / scale, y: (point.y - top) / scale };
+      closeMilitary();
+      findProvince('/api/pick', location);
+    }
   }
   drag = null;
   canvas.classList.remove('dragging');
@@ -497,19 +812,11 @@ canvas.addEventListener('keydown', (event) => {
 $('search').addEventListener('submit', async (event) => {
   event.preventDefault();
   if (!view || mapRequest) return;
-  let address = queryInput.value.trim();
-  if (!address) return;
-  if (address.includes('/')) {
-    const parts = address.split('/');
-    if (parts.length !== 4 || parts[1] !== 'map' || parts[2] !== 'province' || !parts[3]) {
-      searchStatus('请输入省 ID 或完整的省份节点地址。', true);
-      return;
-    }
-    if (parts[0] !== view.info.node && !await loadMap(parts[0])) return;
-  } else {
-    address = view.info.node + '/map/province/' + address;
-  }
-  findProvince('/api/province', { address }, true);
+  const value = queryInput.value.trim();
+  if (!value) return;
+  if (value.includes('/')) await openEntity(value);
+  else if (/^\d+$/.test(value)) await openEntity(view.info.node + '/map/province/' + value);
+  else await searchEntities(value);
 });
 
 $('copy').addEventListener('click', async () => {
@@ -522,11 +829,29 @@ $('copy').addEventListener('click', async () => {
     searchStatus('地址已选中，可手动复制。');
   }
 });
-$('clear-province').addEventListener('click', () => {
-  selectionRequest?.abort();
-  selectProvince(null);
-  searchStatus();
+for (const id of ['clear-province', 'clear-entity']) {
+  $(id).addEventListener('click', () => {
+    selectionRequest?.abort();
+    selectProvince(null);
+    searchStatus();
+  });
+}
+$('close-military').addEventListener('click', closeMilitary);
+formationDialog.addEventListener('close', () => {
+  if (!formationDialog.open) formationDialog.replaceChildren();
 });
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && armyState && !formationDialog.open) {
+    event.preventDefault();
+    closeMilitary();
+  }
+});
+function closeMilitary() {
+  if (!armyState) return;
+  armyRequest?.abort();
+  setArmyState(null);
+  canvas.focus({ preventScroll: true });
+}
 document.querySelectorAll('input[name="layer"]').forEach((input) => {
   input.addEventListener('change', () => {
     layer = input.value;
@@ -541,6 +866,10 @@ for (const toggle of [railwayToggle, hubToggle]) {
     scheduleDraw();
   });
 }
+unitToggle.addEventListener('change', () => {
+  loadUnits();
+  scheduleDraw();
+});
 $('zoom-in').addEventListener('click', () => zoom(1.5));
 $('zoom-out').addEventListener('click', () => zoom(1 / 1.5));
 $('fit').addEventListener('click', fitMap);
@@ -555,4 +884,4 @@ new ResizeObserver(resize).observe($('viewport'));
 resize();
 showLegend();
 loadNodes(true);
-loadMap();
+loadMap(new URLSearchParams(window.location.search).get('node'));

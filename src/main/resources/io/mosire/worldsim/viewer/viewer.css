@@ -85,17 +85,27 @@ h4 { font-size: .875rem; }
 .timeline select { width: clamp(8rem, 16vw, 16rem); }
 .timeline button { white-space: nowrap; }
 
-.workspace { display: grid; grid-template-columns: minmax(0, 1fr) 21rem; min-height: 0; }
-.viewport { position: relative; min-width: 0; background: #122630; overflow: hidden; }
-canvas {
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(17rem, 21rem);
+  grid-template-areas: "map inspector";
+  min-height: 0;
+}
+.workspace.military-open {
+  grid-template-columns: clamp(17.25rem, 23vw, 22rem) minmax(0, 1fr) clamp(17rem, 24vw, 21rem);
+  grid-template-areas: "military map inspector";
+}
+.viewport { grid-area: map; position: relative; min-width: 0; background: #122630; overflow: hidden; }
+#map {
   display: block;
   width: 100%;
   height: 100%;
   cursor: grab;
   touch-action: none;
 }
-canvas.dragging { cursor: grabbing; }
-canvas:focus-visible { outline-offset: -3px; }
+#map.over-counter { cursor: pointer; }
+#map.dragging { cursor: grabbing; }
+#map:focus-visible { outline: 1px solid #ae9a73; outline-offset: -2px; }
 .map-status {
   position: absolute;
   left: 50%;
@@ -109,7 +119,7 @@ canvas:focus-visible { outline-offset: -3px; }
   overflow-wrap: anywhere;
   pointer-events: none;
 }
-.map-counts, .zoom {
+.map-counts, .zoom, .unit-zoom-note {
   position: absolute;
   bottom: 1rem;
   border: 1px solid var(--border);
@@ -126,6 +136,14 @@ canvas:focus-visible { outline-offset: -3px; }
   font-variant-numeric: tabular-nums;
   pointer-events: none;
 }
+.unit-zoom-note {
+  right: 1rem;
+  bottom: 4.15rem;
+  padding: .3rem .55rem;
+  color: var(--muted);
+  font-size: .8125rem;
+  pointer-events: none;
+}
 .zoom { right: 1rem; display: flex; align-items: center; }
 .zoom button { border: 0; border-radius: 0; background: transparent; min-width: 2.35rem; }
 .zoom button + button { border-left: 1px solid var(--border); }
@@ -133,6 +151,7 @@ canvas:focus-visible { outline-offset: -3px; }
 .zoom #fit { font-size: .875rem; white-space: nowrap; }
 
 .inspector {
+  grid-area: inspector;
   background: var(--sidebar);
   overflow-y: auto;
   border-left: 1px solid var(--border);
@@ -168,12 +187,13 @@ canvas:focus-visible { outline-offset: -3px; }
 .rail-key, .hub-key { width: .8rem; display: inline-block; }
 .rail-key { height: .15rem; background: #eca368; }
 .hub-key { height: .8rem; border-radius: 50%; border: 2px solid #bcebe3; }
+.unit-key { width: .95rem; height: .62rem; border: 1px solid #becfb7; border-left: 3px solid #79a88b; background: #344e3f; }
 .province-pane form, .address-row { display: flex; align-items: stretch; gap: .4rem; }
 .province-pane input { min-width: 0; width: 100%; }
 .province-pane button { flex: 0 0 auto; white-space: nowrap; font-size: .875rem; }
 .search-status, .empty-province { color: var(--muted); margin-top: .75rem; font-size: .875rem; overflow-wrap: anywhere; }
 .search-status.error { color: #ffc7b0; }
-#province { margin-top: .85rem; }
+#province, #entity-detail { margin-top: .85rem; }
 .province-toolbar { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
 .province-kind { color: var(--accent); font-size: .875rem; }
 button.quiet { min-height: 2.15rem; padding: .25rem .55rem; }
@@ -192,6 +212,18 @@ button.quiet { min-height: 2.15rem; padding: .25rem .55rem; }
 .province-facts dd { margin: 0; overflow-wrap: anywhere; }
 .address-label { display: block; margin-bottom: .3rem; font-size: .875rem; }
 .address-row input { font: .8125rem/1.5 ui-monospace, Consolas, monospace; }
+.entity-address { margin: .45rem 0 .85rem; color: var(--muted); font-size: .8125rem; overflow-wrap: anywhere; user-select: all; }
+.entity-links { display: grid; gap: .3rem; list-style: none; margin: .55rem 0 0; padding: 0; }
+.entity-links button, .entity-link {
+  width: 100%;
+  text-align: left;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+}
+.province-units { margin: .65rem 0 .85rem; }
+#entity-content { display: grid; gap: .55rem; }
+.entity-source { color: var(--muted); font-size: .875rem; overflow-wrap: anywhere; }
+.entity-source a { color: var(--accent); }
 .evidence { margin-top: .9rem; padding: .65rem .75rem; background: #2d322b; border-left: 2px solid #a58b64; }
 .evidence ul { margin: .35rem 0 0; padding-left: 1.1rem; font-size: .875rem; color: #d6d5c2; }
 .evidence li { overflow-wrap: anywhere; }
@@ -221,10 +253,276 @@ button.quiet { min-height: 2.15rem; padding: .25rem .55rem; }
   white-space: nowrap;
 }
 
+.military-panel {
+  --army-border: #425447;
+  --army-muted: #b1c2b1;
+  grid-area: military;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: #1a2926;
+  border-right: 1px solid #596655;
+}
+.military-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  padding: .48rem .9rem .48rem 1rem;
+  background: #263932;
+  border-top: 2px solid #a59368;
+  border-bottom: 1px solid var(--army-border);
+}
+.military-bar h2 { margin-bottom: 0; font-size: 1.02rem; color: #f1deb0; }
+.military-bar button { font-size: 1.2rem; line-height: 1; width: 2rem; min-height: 2rem; }
+.military-content { overflow-y: auto; padding: .85rem; }
+.military-hero {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  min-height: 4.1rem;
+  padding: .65rem;
+  border: 1px solid var(--army-border);
+  background: linear-gradient(107deg, #324538, #22332b);
+}
+.military-hero-copy { min-width: 0; }
+.military-hero h3 { font-size: 1.12rem; line-height: 1.3; letter-spacing: 0; }
+.military-hero p { margin-top: .2rem; color: var(--army-muted); font-size: .8125rem; overflow-wrap: anywhere; }
+.military-badge {
+  flex: 0 0 auto;
+  width: 3.65rem;
+  height: 2.75rem;
+  display: grid;
+  place-items: center;
+  background: #243a30;
+  border: 1px solid #799183;
+  border-left: 4px solid var(--nation, #9ead81);
+}
+.military-badge canvas { display: block; width: 100%; height: 100%; }
+.military-count { font-size: 1.5rem; font-weight: 700; color: #f3e2bb; font-variant-numeric: tabular-nums; }
+.military-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem; margin: .7rem 0; }
+.military-content button {
+  min-height: 2.15rem;
+  border-color: var(--army-border);
+  font-size: .8375rem;
+  padding: .32rem .55rem;
+}
+.military-content .military-primary { background: #e8c68c; border-color: #e8c68c; color: #25251b; font-weight: 650; }
+.military-content .military-primary:hover { background: #ffe2a7; }
+.military-roster { margin: 0; padding: 0; list-style: none; display: grid; gap: .35rem; }
+.military-roster .military-roster-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: .55rem;
+  padding: .44rem;
+  background: #26382f;
+  border-radius: 2px;
+  text-align: left;
+}
+.military-roster .military-roster-row:hover { background: #3a4b38; border-color: #8e9978; }
+.military-roster .military-badge { width: 2.65rem; height: 2rem; border-left-width: 3px; }
+.military-roster-copy strong { display: block; font-weight: 650; overflow-wrap: anywhere; }
+.military-roster-copy small {
+  display: block;
+  font-size: .75rem;
+  color: var(--army-muted);
+  overflow-wrap: anywhere;
+}
+.military-chevron { color: #d5bd86; font-size: 1.2rem; padding: 0 .13rem; }
+.formation-open { width: 100%; margin: .3rem 0 .15rem; }
+.military-empty { color: var(--army-muted); font-size: .875rem; overflow-wrap: anywhere; }
+.military-sources, .orbat-differences {
+  border-top: 1px solid var(--army-border);
+  margin-top: .65rem;
+  padding-top: .48rem;
+  color: var(--army-muted);
+  font-size: .82rem;
+}
+.military-sources summary, .orbat-differences summary { cursor: pointer; color: #e1ddc7; }
+.military-sources .entity-address { margin-bottom: .45rem; }
+.military-sources summary + p, .orbat-differences summary + p { margin-top: .3rem; }
+
+.formation-dialog {
+  --diagram-border: #43574a;
+  --diagram-line: #809a87;
+  --diagram-muted: #aebfb2;
+  width: min(82rem, calc(100vw - 3rem));
+  height: min(51rem, calc(100dvh - 3rem));
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  border: 1px solid #7e8b73;
+  border-radius: .7rem;
+  background: #1d2d27;
+  color: var(--text);
+  box-shadow: 0 1rem 4rem #0009;
+  overflow: hidden;
+}
+.formation-dialog[open] { display: grid; grid-template-rows: auto auto minmax(0, 1fr); }
+.formation-dialog::backdrop { background: #0b171bcc; }
+.formation-heading, .formation-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .65rem;
+  padding: .7rem .95rem;
+  border-bottom: 1px solid var(--diagram-border);
+}
+.formation-heading { border-top: 2px solid #b49c69; background: #2a3c32; }
+.formation-heading h2 { margin: 0; font-size: 1.14rem; overflow-wrap: anywhere; }
+.formation-heading button { flex: 0 0 auto; min-width: 2.15rem; font-size: 1.24rem; line-height: 1; }
+.formation-toolbar { flex-wrap: wrap; padding-block: .48rem; }
+.formation-tabs, .formation-zoom { display: flex; align-items: center; gap: .32rem; }
+.formation-toolbar button { min-height: 2.1rem; padding: .24rem .58rem; font-size: .82rem; white-space: nowrap; }
+.formation-tabs button[aria-pressed="true"] {
+  background: #3b4939;
+  border-color: #c4ac7a;
+  color: #ffe2a8;
+}
+.formation-zoom .formation-scale {
+  min-width: 3.2em;
+  text-align: center;
+  color: var(--diagram-muted);
+  font-size: .82rem;
+  font-variant-numeric: tabular-nums;
+}
+.formation-workspace {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(12rem, 16rem);
+}
+.formation-workspace.formation-empty { grid-template-columns: minmax(0, 1fr); }
+.formation-viewport {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  padding: 1.5rem;
+  background-color: #182621;
+  background-image: linear-gradient(#afc9b110 1px, transparent 1px), linear-gradient(90deg, #afc9b110 1px, transparent 1px);
+  background-size: 1.5rem 1.5rem;
+  cursor: grab;
+}
+.formation-viewport.dragging { cursor: grabbing; user-select: none; }
+.formation-viewport:focus-visible { outline-offset: -3px; }
+.formation-tree, .formation-children {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  inline-size: max-content;
+  padding: 0;
+  margin: 0 auto;
+  list-style: none;
+}
+.formation-branch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  padding-inline: .6rem;
+}
+.formation-children { position: relative; padding-top: 1.35rem; }
+.formation-children > .formation-branch { padding-top: 1.35rem; }
+.formation-children::before, .formation-children > .formation-branch::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 1px;
+  height: 1.35rem;
+  background: var(--diagram-line);
+  pointer-events: none;
+}
+.formation-children > .formation-branch::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  border-top: 1px solid var(--diagram-line);
+  pointer-events: none;
+}
+.formation-children > .formation-branch::after { top: -1px; height: calc(1.35rem + 1px); }
+.formation-children > .formation-branch:first-child::before { left: 50%; }
+.formation-children > .formation-branch:last-child::before { right: 50%; }
+.formation-card { position: relative; }
+.formation-card .formation-pick {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: .48rem;
+  width: 10.15rem;
+  min-height: 3.75rem;
+  padding: .42rem .48rem;
+  background: #283e33;
+  border-color: #5f7767;
+  border-radius: .28rem;
+  text-align: left;
+  box-shadow: 0 .16rem .46rem #0005;
+}
+.formation-card .formation-pick:hover { background: #344b3c; border-color: #a0b39c; }
+.formation-card .formation-pick[aria-pressed="true"] { background: #394638; border-color: #e4c789; }
+.formation-card .military-badge { width: 2.35rem; height: 2rem; border-left-width: 2px; }
+.formation-card-name { overflow-wrap: anywhere; line-height: 1.25; }
+.formation-card-name strong { display: block; font-size: .82rem; font-weight: 650; }
+.formation-card-name small { display: block; margin-top: .2rem; color: var(--diagram-muted); font-size: .71rem; }
+.formation-toggle {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  z-index: 1;
+  transform: translate(-50%, .22rem);
+  min-width: 1.25rem;
+  min-height: 1.25rem;
+  padding: 0;
+  line-height: 1;
+  background: #23352c;
+  border-color: #819687;
+  color: #d7e5d7;
+}
+.formation-toggle:hover { background: #405245; }
+.formation-inspector {
+  min-width: 0;
+  min-height: 0;
+  padding: 1rem;
+  background: #22342b;
+  border-left: 1px solid var(--diagram-border);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.formation-inspector h3 { font-size: 1.11rem; letter-spacing: 0; }
+.formation-subtitle { margin-top: .24rem; color: var(--diagram-muted); font-size: .8rem; }
+.formation-facts { margin-top: .85rem; padding-top: .6rem; border-top: 1px solid var(--diagram-border); }
+.formation-facts .entity-source { margin-top: .25rem; font-size: .8rem; }
+.formation-strength { margin-top: .2rem; color: #eed8a9; font-size: 1.1rem; font-variant-numeric: tabular-nums; }
+.orbat-equipment { list-style: none; margin: .35rem 0 0; padding: 0; font-size: .82rem; }
+.orbat-equipment li { display: flex; justify-content: space-between; gap: .5rem; padding: .18rem 0; overflow-wrap: anywhere; }
+.formation-message { color: var(--diagram-muted); text-align: center; margin: 2rem auto; }
+
+@media (min-width: 781px) and (max-width: 980px) {
+  .workspace.military-open {
+    grid-template-columns: minmax(16rem, 32vw) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) min(19rem, 32dvh);
+    grid-template-areas: "military map" "inspector inspector";
+  }
+  .military-open .inspector { border: 0; border-top: 1px solid var(--border); }
+}
+
 @media (max-width: 780px) {
   body { height: auto; min-height: 100dvh; }
-  .workspace { grid-template-columns: minmax(0, 1fr); }
+  .workspace, .workspace.military-open { grid-template-columns: minmax(0, 1fr); }
+  .workspace { grid-template-areas: "map" "inspector"; }
+  .workspace.military-open { grid-template-areas: "map" "military" "inspector"; }
   .viewport { height: 65dvh; min-height: 21rem; }
+  .military-open .viewport { height: 43dvh; min-height: 16rem; }
+  .military-panel { max-height: 50dvh; border-right: 0; }
+  .formation-dialog { width: calc(100vw - 1rem); height: calc(100dvh - 1rem); }
+  .formation-heading, .formation-toolbar { padding-inline: .65rem; }
+  .formation-heading h2 { font-size: .96rem; }
+  .formation-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  .formation-inspector { max-height: 26dvh; border-left: 0; border-top: 1px solid var(--diagram-border); }
   .inspector { border: 0; border-top: 1px solid var(--border); }
   .topbar { flex-wrap: wrap; padding: .65rem .9rem; }
   .timeline { flex-wrap: wrap; }
