@@ -1,9 +1,9 @@
 # STATUS.md —— 当前状态
 
-> **更新时间**：2026-11-19 11:22 UTC（19:22 CST）
-> **当前目标**：保存文件世界、GM MCP 与查看器交付，调查国家、军队和真实地理对照的下一阶段设计。
-> **当前阶段**：首版查看器已实现并通过真实地图和世界副本验收。交付时独立查看器运行在 `http://127.0.0.1:8765/`，已验证 Windows 侧 IPv4 访问。
-> **责任区与设计**：[查看器实施计划](../superpowers/plans/2026-11-19-map-viewer.md)、[查看器专题设计](../superpowers/specs/2026-11-19-readonly-map-viewer.md)。
+> **更新时间**：2026-11-19 11:29 UTC（19:29 CST）
+> **当前目标**：设计地图地名定位、国家归属和 ORBAT 部署的下一阶段闭环。
+> **当前阶段**：文件世界、GM MCP 与只读查看器已推送到 `origin/main` 的交付提交 `f28da02`。地理与国家调查完成，已记录真实地图实测和工程建议。
+> **责任区与设计**：[查看器实施计划](../superpowers/plans/2026-11-19-map-viewer.md)、[查看器专题设计](../superpowers/specs/2026-11-19-readonly-map-viewer.md)、[地理定位与国家/ORBAT 调查](../superpowers/reports/2026-11-19-geography-country-orbat-recon.md)。
 
 ## 源码基线与有效入口
 
@@ -36,6 +36,10 @@
 - 真实地图普通邻接 64387 条，与 polygon 推导的 64387 条一致，特殊邻接 809 条。早期探针只排除 `special-` 前缀，误将 10 条 `kind=special` 计作普通邻接；原始记录核对后已纠正，实际普通拓扑差异为 0。迁移报告 `world/migration-report.json`、证据 `/tmp/worldsim-border-probe.log`。
 
 ## 最近验证
+
+### 2026-11-19 地理与国家调查
+
+真实 Magna 的 Lisboa、Paris 等省份通过地址与逻辑坐标命中。按 1936 剧本 `POR` 州史提取 19 州、79 省，副本 MCP 的 79 个标签批量预览通过。正式国家命令不在当前 schema 中。25 个主图城市的 Miller 留一验证同省命中 20 个，北美插图需独立配准，州 947 的名称存在上游证据冲突。两项探针退出码均为 0，命令、范围和证据见[调查](../superpowers/reports/2026-11-19-geography-country-orbat-recon.md)。
 
 ### 2026-11-19 查看器交付
 
@@ -79,4 +83,4 @@
 - 文件存储已做多个提交阶段的强制进程退出与重启测试；真实断电、其他操作系统/文件系统及其目录同步语义 `NOT_RUN`。复制或备份世界应在服务停止、锁释放后进行。
 - Maven 构建依赖本地 Maven 仓库 `io.mosire:agentlib-mosire:0.2.5`，干净机器的依赖准备尚未验证。
 - 浏览器交互实测于 WSL Chromium，Windows 已验证正式端口的 IPv4 回环 HTTP。其他浏览器实测 `NOT_RUN`。
-- 下一步第一条命令 `sed -n '253,378p' docs/superpowers/specs/2026-11-17-map-orbat-info-timeline-design.md`。结合 Magna 地名与剧本来源，先调查地理定位、国家归属和 ORBAT 部署。
+- 下一步第一条命令 `sed -n '1,120p' docs/superpowers/reports/2026-11-19-geography-country-orbat-recon.md`。先定地名查询和国家持久化的专题契约，再用葡萄牙验证首个国家与编制部署切片。
