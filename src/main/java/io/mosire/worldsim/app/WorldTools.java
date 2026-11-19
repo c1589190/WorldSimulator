@@ -36,6 +36,16 @@ public final class WorldTools {
         props("node", string(), "query", string(), "kind", string(), "offset", integer(), "limit", integer()),
         List.of("query"), (a, c) -> app.search(optionalString(a, "node"), requiredString(a, "query"),
             optionalString(a, "kind"), optionalInt(a, "offset", 0), optionalInt(a, "limit", 25))));
+    tools.register(tool(app, "world_geo_lookup", "用地名或 WGS84 经纬度查省，或用完整省份地址查近似 WGS84 位置", false,
+        props("node", string(), "name", string(), "longitude", Map.of("type", "number"),
+            "latitude", Map.of("type", "number"), "address", string()), List.of(),
+        (a, c) -> app.geoLookup(optionalString(a, "node"), optionalString(a, "name"),
+            optionalNumber(a, "longitude"), optionalNumber(a, "latitude"), optionalString(a, "address"))));
+    tools.register(tool(app, "world_territory_gaps", "分页查缺少归属的陆省；默认用史料范围，scope=all 查全图",
+        false, props("node", string(), "scope", string(), "countryId", string(), "stateId", string(),
+            "offset", integer(), "limit", integer()), List.of(),
+        (a, c) -> app.territoryGaps(optionalString(a, "node"), optionalString(a, "scope"),
+            optionalString(a, "countryId"), optionalString(a, "stateId"), optionalInt(a, "offset", 0), optionalInt(a, "limit", 25))));
     tools.register(tool(app, "orbat_export", "从编制文档或节点地址导出 DSH mil-org v1，并报告损失", false,
         props("address", string()), List.of("address"), (a, c) -> app.exportMilOrg(requiredString(a, "address"))));
     tools.register(tool(app, "world_validate", "校验节点并列出遗留拓扑差异", false,
@@ -181,6 +191,11 @@ public final class WorldTools {
   }
   private static String optionalString(Map<String, Object> args, String key) {
     return args.containsKey(key) ? requiredString(args, key) : null;
+  }
+  private static Double optionalNumber(Map<String, Object> args, String key) {
+    if (!args.containsKey(key)) return null;
+    if (!(args.get(key) instanceof Number value)) throw new IllegalArgumentException(key + " 必须是数值");
+    return value.doubleValue();
   }
   private static boolean optionalBool(Map<String, Object> args, String key, boolean fallback) {
     Object value = args.get(key);

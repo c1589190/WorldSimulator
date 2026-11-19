@@ -1,13 +1,13 @@
 # STATUS.md —— 当前状态
 
-> **更新时间**：2026-11-19 21:10 CST
-> **当前目标**：交付已验收的国家、单位部署和编制查看阶段。
-> **当前阶段**：编制图窗口已验收，运行于 `http://127.0.0.1:8766/?node=division-test-1`。选择任一装甲师后点「查看编制图」。交互契约见[查看器专题](../superpowers/specs/2026-11-19-readonly-map-viewer.md)。
+> **更新时间**：2026-11-19 22:56 CST
+> **当前目标**：接入外部地理参考并通过程序工具建立可玩的 1936 欧洲剧本，再推进 Agent 回合。
+> **当前阶段**：欧洲主图已配准，1936 德波边界、师级序列和归属调试已验收。其他开局资料和 Agent 回合待实施。入口为[首片计划](../superpowers/plans/2026-11-19-1936-geography-pilot.md)、[推演契约](../superpowers/specs/2026-11-19-1936-europe-agent-turns.md)和[史料查证记录](../superpowers/reports/2026-11-19-1936-source-research.md)。编制窗口基线为 `7fba0fc`。
 > **责任区与设计**：[地图单位与 ORBAT 契约](../superpowers/specs/2026-11-19-unit-address-and-orbat-format.md)、[实施计划](../superpowers/plans/2026-11-19-country-orbat-pilot.md)、[地理定位与国家调查](../superpowers/reports/2026-11-19-geography-country-orbat-recon.md)。
 
 ## 源码基线与有效入口
 
-- 仓库 `~/WorldSimulator`，单模块 Maven 工程，JDK 21。交付分支为 `main`，本阶段以 `aacb3ed` 为基线。当前提交与同步状态见 `git log -1 --oneline` 和 `git status --short --branch`。
+- 仓库 `~/WorldSimulator`，单模块 Maven 工程，JDK 21。交付分支为 `main`，1936 阶段以 `7fba0fc` 为基线。当前提交与同步状态见 `git log -1 --oneline` 和 `git status --short --branch`。
 - 交付范围为文件存档、迁移、GM MCP 及查看器的代码、测试与文档。打包产物是 `target/worldsim-0.1.0-SNAPSHOT.jar`。`world/` 是 gitignored 本地用户数据，旧 `runtime/worlds/magna-europa.db` 保留。
 - 用户设计原稿：`docs/superpowers/specs/2026-11-17-worldsim-architecture-design-source.md`；专题设计：`docs/superpowers/specs/2026-11-17-map-orbat-info-timeline-design.md`；裁定索引：`docs/superpowers/DESIGN_RULINGS.md`。
 - 项目维护入口：`docs/AGENTS.md`、`docs/agents/MAINTENANCE_RULINGS.md`；构建和启动步骤见根 `README.md`。
@@ -22,6 +22,8 @@
 - 世界视图 `world/view/` 是带节点及状态 hash 的可读分块，可重建；导出包含可达已提交历史、数据及可选来源报告，不包含缓存、源文件或未提交内容。入口：`src/main/java/io/mosire/worldsim/world/WorldView.java:17`、`src/main/java/io/mosire/worldsim/world/WorldExport.java:10`。
 - 正常启动、保存和回放不需要 SQLite，当前没有 SQLite 索引；SQLite 驱动只供 `world/imports/` 中的旧库显式只读迁移，源库不删除。入口：`src/main/java/io/mosire/worldsim/world/WorldMigration.java:24`。
 - AgentLib GM stdio MCP 已提供摘要、实体查询、验证、树/差异、打开草稿、批量预览/应用、保存/放弃、视图及导出；工具角色与世界资源权限由服务端实施。草稿在内存，保存要求基点 hash、版本和 requestId；重启后同请求可重放保存回执。入口：`src/main/java/io/mosire/worldsim/app/WorldTools.java`、`src/main/java/io/mosire/worldsim/app/WorldApplicationService.java:32`。
+- 世界可带独立的 `geo-reference.json`。`world_geo_lookup` 和查看器支持已校对别名、WGS84 坐标查省与省址反查，原生省形用于候选判断。查看器可显示带来源和日期的史料边界。试点需固定地图和史料输入，可用准备脚本和 GM MCP 导入器复跑。[复现记录](../superpowers/reports/2026-11-19-1936-source-research.md#复现导入)
+- `world_territory_gaps` 与「归属调试」用同一节点的归属查找待补陆省。参考带史料范围时按预期省和国家筛选；工具可用 `scope=all` 查看全图。网页的高亮和清单可用于旧节点对照。[调试契约](../superpowers/specs/2026-11-19-1936-europe-agent-turns.md#7-边界复核归属调试与师级序列)
 - 保存前检查普通邻接是否对应 polygon，并禁止引入新的不一致；特殊邻接单独处理。`verifyAll` 重放每个节点自身 delta 并校验 checkpoint，修复旧审计所列两项缺口。入口：`src/main/java/io/mosire/worldsim/map/PolygonTopology.java:53`、`src/main/java/io/mosire/worldsim/timeline/TimelineService.java:138`。
 - `world/provenance.json` 将来源提示与节点/hash 关联，记录来源、推断和几何修复；后代若更改对应字段，查询不再沿用该字段的旧提示。其是附加证据而非第二套状态。入口：`src/main/java/io/mosire/worldsim/app/WorldProvenance.java`。
 - 只读地图查看器可用 `viewer [--port 8765]` 独立启动，或用 `mcp --viewer-port 8765` 与 GM MCP 共用进程。支持省 ID/地址搜索、原始几何点选、可见瓦片、三种着色、铁路/补给中心与已保存节点切换。入口见 `src/main/java/io/mosire/worldsim/app/viewer/WorldViewerServer.java` 和 `src/main/resources/io/mosire/worldsim/viewer/index.html`。
@@ -33,6 +35,7 @@
 
 - 社区地图是欧洲范围的 **Magna Europa: Reforged**，源 `https://github.com/AzurCrystal/Magna-Europa.git`，固定提交 `d7a57759c188a034c49a0e96aceb1702fa76fc74`，HOI4 1.19.* / mod 0.99.6；raw 在 `runtime/imports/MagnaEuropa`。上游根目录无标准 LICENSE，公开分发前仍需确认；下载脚本 `tools/fetch-community-map.sh`。
 - 当前世界为 `world/world.json` 的 `magnaeuropa`，只有 `main-0`，hash `sha256:097b73086f835cd63df788a787c09cd32fd165be896b39b158c85c43139371ff`。21670 省、2986 州、253 战略区域、674 补给中心、1921 铁路、65196 邻接、27504 EntityLinks。
+- 1936 德波当前世界位于 `runtime/scenario-1936/opening/demo/world/`，运行 jar 为 `target/worldsim-scenario-1936-opening.jar`。`de-pl-1936-2` 记录德国 1,428 省、波兰 907 省、但泽自由市 5 省，德国 29 个师、波兰 31 个师及 213 个下属编制节点。可和 `de-pl-1936-1` 比对。[Windows 查看器](http://127.0.0.1:8767/?node=de-pl-1936-2&layer=owner)
 - 1936 葡萄牙验收世界位于 `runtime/portugal-1936-demo.ncxp4mk5/world/`。`portugal-1936-1` 记录 79 省归属和 Lisboa 的单位 `por-governo`。`portugal-1936-2` 在此基础上补入剧本中的 7 条部署，合计 Lisboa 3 个、Porto 3 个、Coimbra 2 个。实际控制与编制数量保持未知。原 8765 服务仍指向原 `main-0`。[部署来源](https://github.com/AzurCrystal/Magna-Europa/blob/d7a57759c188a034c49a0e96aceb1702fa76fc74/history/units/POR_1936.txt#L40)
 - 演示世界的 `counter-test-1` 从 `main-0` 分叉。Lisboa（19738）有 6 个明确标注的测试单位，显示坐标同为 `(783, 2274)`，来源标记为 `fixture:viewer-counter-zoom`。构造命令见演示目录的 `counter-zoom-test-commands.json`。
 - 演示世界的 `division-test-1` 从 `main-0` 分叉，两个测试装甲师均部署在 Lisboa（19738）的同一显示点。两师各有独立实际编制树，共用一个理想模板。地图只投影两条师级部署实例，团、营、连、排由编制树展示，见 `src/main/java/io/mosire/worldsim/app/WorldQueries.java:139`。测试来源为 `fixture:viewer-division-hierarchy`，构造命令见演示目录的 `division-qa/commands.json`。
@@ -41,6 +44,32 @@
 - 真实地图普通邻接 64387 条，与 polygon 推导的 64387 条一致，特殊邻接 809 条。早期探针只排除 `special-` 前缀，误将 10 条 `kind=special` 计作普通邻接；原始记录核对后已纠正，实际普通拓扑差异为 0。迁移报告 `world/migration-report.json`、证据 `/tmp/worldsim-border-probe.log`。
 
 ## 最近验证
+
+### 2026-11-19 德波边界、师级序列与归属调试
+
+证据位于 `runtime/scenario-1936/opening/`。[查证路径与复现](../superpowers/reports/2026-11-19-1936-source-research.md#德波开局复核与补录)
+
+| 项目 | 工具或方式 | 结果与证据 |
+|---|---|---|
+| 全量构建 | 隔离目录 `mvn -o clean verify` | **PASS**，rc=0，94 tests / 0 failures / 0 errors / 0 skipped，含查缺项、全图范围和保存后旧节点对照。见 `verify-build.log`。 |
+| 导入与回放 | `submit-scenario.py --apply`，重启 `verify-mcp.py` | **PASS**，rc=0，244 条命令三批预览，回放 3 个节点。旧节点 192 个缺项，新节点在同一史料范围内为 0。核对全部 60 个师部和 213 个编制子节点。见 `import-receipt.json`、`verify-mcp.json`。 |
+| 普通陆地邻接 | 对比两节点 `world_view` 的省归属和邻接 | **PASS**，rc=0，同一德波边界 113 条邻接全部有归属，旧节点有 41 条。见 `border-edges.json`。 |
+| 截图与界面 | Chromium 同倍率对照地图，切换调试节点并点击缺项 | **PASS**，rc=0，旧节点有粉色缺项，修正节点无同色高亮。分页、定位、Kielce 编制图均通过。见 `gaps-browser.log` 和前后截图。 |
+| Windows 地址 | `curl.exe -4 --noproxy '*'` 请求 8767 的新节点和 `/api/territory/gaps` | **PASS**，rc=0，返回 3 个国家、60 个师部和史料范围内 0 个缺项。见 `viewer-windows.json`、`gaps-windows.json`。 |
+
+### 2026-11-19 1936 德波地理与导入
+
+证据位于 `runtime/scenario-1936/`。外部输入版本、地名预检、史料页码和省级复核步骤见[史料查证记录](../superpowers/reports/2026-11-19-1936-source-research.md)。
+
+| 项目 | 命令或方式 | 结果与证据 |
+|---|---|---|
+| 全量构建 | 隔离目录 `mvn -o clean verify` | **PASS**，rc=0，94 tests / 0 failures / 0 errors / 0 skipped，含地名、坐标边界、反查与基准 hash 回归。见 `verify-build.log`。 |
+| 配准与复现 | `tools/prepare-1936-pilot.py` 与两次生成结果对比 | **PASS**，rc=0，42 个拟合点、15 个留出点、12 个同省像素命中，最大残差 4.749 地图单位。见 `prepared/research.json` 和 `prepare-confirmed.log`。 |
+| 批量导入和保存 | `tools/submit-scenario.py --apply`（其余参数见复现记录） | **PASS**，rc=0，450 条命令五批预览并保存一次，五批无已有归属冲突。核对两国归属数和四处部署，原世界清单校验一致。第二份独立导入的预览、应用和保存 hash 一致。见 `import-receipt.json`、`import-parity.json`。 |
+| 无提交预览 | 用同一导入器预览 3 条命令，省略 `--apply` | **PASS**，rc=0，预览后丢弃草稿，副本清单与创世导出逐字节相同。见 `dry-run/receipt.json`。 |
+| 重启 MCP | `python3 -B runtime/scenario-1936/verify-mcp.py` | **PASS**，rc=0。确定命中、多候选、覆盖外与反查均通过。4 个师部及其编制可回读，`timeline_verify` 验证 2 个节点，导出保留地理参考。见 `verify-mcp.json`。 |
+| 查看器 | `node runtime/scenario-1936/verify-viewer.cjs` | **PASS**，rc=0。Chromium 验证归属底色、史料边界、别名、地理候选和反查、左侧军队面板、编制图及切回旧节点。见 `verify-viewer.log`。 |
+| Windows 地址 | `curl.exe -4 --noproxy '*'` 请求 8767 `/api/map?node=de-pl-1936-1` | **PASS**，rc=0，返回正确分支 hash、2 个国家、4 个部署。见 `viewer-windows.json`。 |
 
 ### 2026-11-19 编制图窗口
 
@@ -135,10 +164,10 @@
 
 ## 风险、未验证与下一步
 
-- 地理配准停留在主图试验，留一验证同省命中 20/25。图幅配准、经纬度查省和外部边界叠层尚未接入。证据见[地理调查](../superpowers/reports/2026-11-19-geography-country-orbat-recon.md)。
+- 地理参考覆盖 57 个校对地点圈定的主图范围。海外插图仍需独立配准。德波地理缺项已回填，微观地界以原生省形近似。独立旅、实际控制、兵力及装备仍待补证据，其他国家的部署和政治、经济、外交资料待补。证据见[史料查证记录](../superpowers/reports/2026-11-19-1936-source-research.md)。
 - 编制查询已返回节点直属数量和直属差额。整个下属树的人员、装备汇总及覆盖率仍待实现，见 `src/main/java/io/mosire/worldsim/app/WorldQueries.java:67`。行军、动态补给与战斗后续接入。
 - 大图在本机的迁移和校验占用约 1.4–1.9 GB RSS，启动与全链验证存在多秒级成本；保存的派生视图增加磁盘占用。可根据使用情况继续优化，不能把本机结果当性能保证。
 - 文件存储已做多个提交阶段的强制进程退出与重启测试；真实断电、其他操作系统/文件系统及其目录同步语义 `NOT_RUN`。复制或备份世界应在服务停止、锁释放后进行。
 - Maven 构建依赖本地 Maven 仓库 `io.mosire:agentlib-mosire:0.2.5`，干净机器的依赖准备尚未验证。
 - 浏览器交互实测于 WSL Chromium，Windows 已验证正式端口的 IPv4 回环 HTTP。其他浏览器实测 `NOT_RUN`。
-- 下一步第一条命令 `sed -n '29,52p' docs/superpowers/reports/2026-11-19-geography-country-orbat-recon.md`。后续可按图幅接经纬度配准，再结合源资料扩展剧本范围。
+- 下一步第一条命令 `sed -n '8,35p' docs/superpowers/specs/2026-11-19-1936-europe-agent-turns.md`。按同样流程核对其他开局国家的领土和师级部署，再完成 GM 管理的国别可见信息、决策提交和回合保存。[回合契约](../superpowers/specs/2026-11-19-1936-europe-agent-turns.md#4-一个推演回合)

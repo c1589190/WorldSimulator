@@ -101,6 +101,10 @@ java -Xmx5g -jar target/worldsim-0.1.0-SNAPSHOT.jar viewer
 
 在 Windows 或 WSL 浏览器打开 `http://127.0.0.1:8765/`。拖动平移，滚轮或按钮缩放。可输入地名、省 ID 或完整的节点地址。图层支持地形、州、战略区域、国家归属和实际控制着色，叠加铁路省链、补给中心和部署单位。点省份列表或单位标记可查看单位、部署及两份编制。页首选择已保存的时间线节点，也可用 `?node=<branch-tick>` 直接进入某个节点。默认端口可用 `viewer --port <port>` 调整。
 
+已配准的世界支持多语地名和 `经度,纬度` 搜索。坐标误差范围触及省界时可选候选省。省份详情显示近似 WGS84 位置，点经纬度可在 OpenStreetMap 复核。德波样例可叠加有日期的史料边界。[1936 资料与导入复现](docs/superpowers/reports/2026-11-19-1936-source-research.md)
+
+「归属调试」用粉色标出待补归属的陆省。右侧清单可跳到省份并复制节点地址。世界带有史料范围时，地图及清单按该范围显示；其余世界查全图。可用 `?node=<branch-tick>&layer=owner-gaps` 直达。
+
 同时使用 Agent 与查看器时，在 MCP 客户端的 jar 参数末尾加 `mcp --viewer-port 8765`，两者共用进程与世界锁。查看器通过页首的**刷新**读取新保存节点。启动地址写到 stderr，MCP 的 stdout 保留协议输出。独立查看与组合启动均使用当前工作目录的 `world/`。
 
 ## GM MCP
@@ -108,6 +112,8 @@ java -Xmx5g -jar target/worldsim-0.1.0-SNAPSHOT.jar viewer
 AgentLib 工具调用经过角色、工具和世界资源授权；调用身份由启动端绑定。当前工具：
 
 - `world_overview`、`world_lookup`、`world_search`、`world_validate`：读世界摘要、实体和地图拓扑，通过地名、别名和 ID 查询同一节点下的规范地址。`world_lookup` 默认省略 polygon 顶点。
+- `world_geo_lookup` 接受 `name` 或 `longitude` 与 `latitude`，可指定 `node`。单独传完整省份 `address` 可反查近似经纬度和已校对的地名对应。
+- `world_territory_gaps` 分页查待补归属的陆省，返回节点地址、州和史料预期国家。可传 `node`、`countryId`、`stateId`、`offset` 和 `limit`。传 `scope="all"` 可查看全图。
 - `timeline_tree`、`timeline_diff`、`timeline_verify`：查看和完整验证已保存时间线。
 - `edit_open`、`edit_apply`、`edit_save`、`edit_discard`：打开内存草稿、批量预览/应用、保存或放弃。
 - `world_view`、`world_export`：重建可读视图，或导出全部已提交分支。

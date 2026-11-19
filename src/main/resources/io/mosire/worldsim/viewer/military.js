@@ -23,6 +23,7 @@ const echelons = new Map([
 ]);
 const types = new Map([
   ['infantry', ['步兵', 'infantry']], ['light-infantry', ['轻步兵', 'light-infantry']],
+  ['mountaineer', ['山地步兵', 'light-infantry']],
   ['motorized', ['摩托化步兵', 'motorized']], ['mechanized', ['机械化步兵', 'motorized']],
   ['cavalry', ['骑兵', 'cavalry']], ['armored', ['装甲', 'armored']], ['armour', ['装甲', 'armored']],
   ['armor', ['装甲', 'armored']], ['tank', ['装甲', 'armored']], ['artillery', ['炮兵', 'artillery']],

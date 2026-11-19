@@ -22,6 +22,8 @@ import io.mosire.worldsim.world.FileTimelineStore;
 import io.mosire.worldsim.world.WorldExport;
 import io.mosire.worldsim.world.WorldView;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -29,8 +31,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /** Transport-independent GM application service. All world operations share one locked store. */
 public final class WorldApplicationService {
@@ -40,6 +44,9 @@ public final class WorldApplicationService {
 
   private record Applied(String requestHash, Map<String, Object> result) {}
   private record Preview(long version, String commandHash, StaticWorldState candidate, List<WorldChange> changes) {}
+  private record GapScope(NodeRef node, boolean referenceOnly) {}
+  private record TerritoryGap(String provinceId, String stableId, String address, String name, String stateId,
+                              String stateName, String expectedCountryId) {}
   private static final class Draft {
     final String actor;
     final TimelineWorkingCopy copy;
@@ -51,12 +58,16 @@ public final class WorldApplicationService {
 
   private final FileTimelineStore store;
   private final TimelineService timeline;
+  private WorldGeography geography;
   private final Map<String, Draft> drafts = new HashMap<>();
   private final LinkedHashMap<NodeRef, StaticWorldState> cache = new LinkedHashMap<>(4, .75f, true) {
     @Override protected boolean removeEldestEntry(Map.Entry<NodeRef, StaticWorldState> e) { return size() > 2; }
   };
   private final LinkedHashMap<NodeRef, WorldSearchIndex> search = new LinkedHashMap<>(4, .75f, true) {
     @Override protected boolean removeEldestEntry(Map.Entry<NodeRef, WorldSearchIndex> e) { return size() > 2; }
+  };
+  private final LinkedHashMap<GapScope, Set<String>> territoryGaps = new LinkedHashMap<>(4, .75f, true) {
+    @Override protected boolean removeEldestEntry(Map.Entry<GapScope, Set<String>> e) { return size() > 4; }
   };
 
   public WorldApplicationService(FileTimelineStore store) {
@@ -139,6 +150,121 @@ public final class WorldApplicationService {
     SavedMap saved = savedMap(address);
     var index = search.computeIfAbsent(saved.node(), ignored -> new WorldSearchIndex(saved.state()));
     return index.search(saved.node(), saved.stateHash(), query, kind, offset, limit);
+  }
+
+  public boolean hasGeographicReference() {
+    return Files.isRegularFile(store.world().resolve("geo-reference.json"));
+  }
+
+  public synchronized Map<String, Object> geoLookup(String nodeLabel, String name, Double longitude, Double latitude,
+                                                     String provinceAddress) {
+    if (provinceAddress != null) {
+      if (nodeLabel != null || name != null || longitude != null || latitude != null) {
+        throw new IllegalArgumentException("请单独提供完整省份地址");
+      }
+      var address = NodeAddress.parse(provinceAddress);
+      SavedMap saved = savedMap(address.node().label());
+      if (!(MapAddressResolver.resolve(saved.map(), address).value() instanceof Province province)) {
+        throw new IllegalArgumentException("请输入省份地址");
+      }
+      return geoPosition(saved, province);
+    }
+    if (name == null) {
+      if (longitude == null || latitude == null) throw new IllegalArgumentException("请提供地名或经纬度两值");
+      WorldGeography.requireCoordinates(longitude, latitude);
+    } else {
+      requireText(name, "name");
+      if (longitude != null || latitude != null) throw new IllegalArgumentException("地名和经纬度须分别查询");
+    }
+    SavedMap saved = savedMap(nodeLabel);
+    var source = geography(saved);
+    return source == null
+        ? Map.of("node", saved.node().label(), "stateHash", saved.stateHash(), "status", "unavailable", "candidates", List.of())
+        : source.lookup(saved, name, longitude, latitude);
+  }
+
+  public synchronized Map<String, Object> geoPosition(SavedMap saved, Province province) {
+    var source = geography(saved);
+    return source == null ? Map.of("node", saved.node().label(), "stateHash", saved.stateHash(), "status", "unavailable",
+        "address", WorldQueries.address(saved.node(), "map", "province", province.id())) : source.locate(saved, province);
+  }
+
+  public synchronized Map<String, Object> geoOverlay(String address) {
+    SavedMap saved = savedMap(address);
+    var source = geography(saved);
+    return source == null ? Map.of("borders", List.of()) : source.overlay(saved);
+  }
+
+  public synchronized Map<String, Object> territoryGaps(String nodeLabel, String scope, String countryId,
+                                                         String stateId, int offset, int limit) {
+    requirePage(offset, limit);
+    if (scope != null && !Set.of("reference", "all").contains(scope)) {
+      throw new IllegalArgumentException("scope 须为 reference 或 all");
+    }
+    SavedMap saved = savedMap(nodeLabel);
+    var reference = territoryReference(saved);
+    boolean referenceOnly = reference != null && !"all".equals(scope);
+    Map<String, String> expected = reference == null ? Map.of() : reference.owners();
+    var matches = territoryGapIds(saved, referenceOnly ? reference : null).stream()
+        .filter(id -> countryId == null || countryId.equals(expected.get(id)))
+        .filter(id -> stateId == null || stateId.equals(saved.map().provinces().get(id).stateId()))
+        .sorted().toList();
+    int from = Math.min(offset, matches.size());
+    int to = Math.min(from + limit, matches.size());
+    var page = matches.subList(from, to).stream().map(id -> {
+      var province = saved.map().provinces().get(id);
+      var state = province.stateId() == null ? null : saved.map().states().get(province.stateId());
+      return new TerritoryGap(id, "province:" + id, WorldQueries.address(saved.node(), "map", "province", id),
+          province.name(), province.stateId(), state == null ? null : state.name(), expected.get(id));
+    }).toList();
+    var result = new LinkedHashMap<String, Object>(Map.of("node", saved.node().label(), "stateHash", saved.stateHash(),
+        "scope", referenceOnly ? "reference" : "all", "offset", from, "total", matches.size(), "gaps", page));
+    if (reference != null) {
+      result.put("referenceDate", reference.date());
+      result.put("source", reference.source());
+    }
+    return result;
+  }
+
+  public synchronized Set<String> territoryGapIds(SavedMap saved) {
+    return territoryGapIds(saved, territoryReference(saved));
+  }
+
+  private Set<String> territoryGapIds(SavedMap saved, WorldGeography.TerritoryReference reference) {
+    return territoryGaps.computeIfAbsent(new GapScope(saved.node(), reference != null), ignored ->
+        saved.map().provinces().values().stream().filter(province -> province.kind().equals("land"))
+            .filter(province -> reference == null || reference.owners().containsKey(province.id()))
+            .filter(province -> {
+              var territory = saved.state().countries().territories().get(province.id());
+              return territory == null || territory.owner() == null;
+            })
+            .map(Province::id).collect(Collectors.toUnmodifiableSet()));
+  }
+
+  private WorldGeography.TerritoryReference territoryReference(SavedMap saved) {
+    var source = geography(saved);
+    return source == null ? null : source.reference().territory();
+  }
+
+  private WorldGeography geography(SavedMap saved) {
+    if (geography == null) {
+      if (!hasGeographicReference()) return null;
+      try {
+        var parsed = new WorldGeography(Files.readString(store.world().resolve("geo-reference.json")));
+        var reference = parsed.reference();
+        if (!requireNode(node(reference.base())).stateHash().equals(reference.baseHash())) {
+          throw new IllegalArgumentException("地理参考与基准节点的 hash 不一致");
+        }
+        geography = parsed;
+      } catch (IOException | RuntimeException e) {
+        throw new TimelineException("GEO_REFERENCE_INVALID", "无法使用世界地理参考: " + e.getMessage());
+      }
+    }
+    var reference = geography.reference();
+    if (reference.width() != saved.map().width() || reference.height() != saved.map().height()) {
+      throw new TimelineException("GEO_REFERENCE_INVALID", "地理参考与当前地图的尺寸不一致");
+    }
+    return geography;
   }
 
   public synchronized List<?> unitMarkers(String address) {

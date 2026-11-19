@@ -1,5 +1,6 @@
 package io.mosire.worldsim.app;
 
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.mosire.agentlib.permission.AccessToken;
 import io.mosire.agentlib.permission.AgentIdentity;
 import io.mosire.agentlib.permission.AgentPermissionSet;
@@ -26,10 +27,74 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class WorldApplicationServiceTest {
+  @Test
+  void geographyResolvesAliasesAndKeepsBoundaryCandidates(@TempDir Path world) throws Exception {
+    try (var store = FileTimelineStore.create(world, SampleWorld.WORLD_ID)) {
+      var root = new TimelineService(store).createGenesis(SampleWorld.create(), "gm:test");
+      var app = new WorldApplicationService(store);
+      assertEquals("unavailable", app.geoLookup("main-0", "West", null, null, null).get("status"));
+      assertEquals(2, app.territoryGaps("main-0", null, null, null, 0, 1).get("total"));
+
+      var reference = new WorldGeography.Reference("worldsim-geo-v1", "fixture", "main-0", root.stateHash(),
+          200, 100, "fixture", List.of(new Vec2(-90, -30), new Vec2(90, -30), new Vec2(90, 30), new Vec2(-90, 30)),
+          List.of(100.0, 180 / Math.PI, 0.0, 50.0, 0.0, -80.0), 2,
+          new WorldGeography.Check(3, 1, 1, 1),
+          List.of(new WorldGeography.Place("west", List.of("West", "Wéststadt"), -40, 0, "fixture")), List.of(),
+          new WorldGeography.TerritoryReference("1936-01-01", "fixture", Map.of("west", "WEST")));
+      var path = world.resolve("geo-reference.json");
+      ObjectNode encoded = JsonCodec.mapper().valueToTree(reference);
+      Files.writeString(path, JsonCodec.canonicalJson(reference));
+
+      var alias = JsonCodec.mapper().valueToTree(app.geoLookup("main-0", "weststadt", null, null, null));
+      assertEquals("resolved", alias.path("status").asText());
+      assertEquals("main-0/map/province/west", alias.path("candidates").get(0).path("address").asText());
+      var interior = JsonCodec.mapper().valueToTree(app.geoLookup("main-0", null, -40.0, 0.0, null));
+      assertEquals("resolved", interior.path("status").asText());
+      assertEquals("province:west", interior.path("candidates").get(0).path("stableId").asText());
+      var boundary = JsonCodec.mapper().valueToTree(app.geoLookup("main-0", null, 1.0, 0.0, null));
+      assertEquals("ambiguous", boundary.path("status").asText());
+      assertEquals(2, boundary.path("candidates").size());
+      assertEquals("east", boundary.path("candidates").get(0).path("provinceId").asText());
+      assertEquals("outside-coverage", app.geoLookup("main-0", null, 95.0, 0.0, null).get("status"));
+
+      var reverse = JsonCodec.mapper().valueToTree(app.geoLookup(null, null, null, null, "main-0/map/province/west"));
+      assertEquals("estimated", reverse.path("status").asText());
+      assertEquals(-50.0, reverse.path("position").path("longitude").asDouble(), 1e-10);
+      assertEquals(0.0, reverse.path("position").path("latitude").asDouble(), 1e-10);
+      assertEquals("west", reverse.path("places").get(0).path("provinceId").asText());
+
+      var gaps = JsonCodec.mapper().valueToTree(app.territoryGaps("main-0", null, "WEST", "heartland", 0, 10));
+      assertEquals("reference", gaps.path("scope").asText());
+      assertEquals(1, gaps.path("total").asInt());
+      assertEquals("main-0/map/province/west", gaps.path("gaps").get(0).path("address").asText());
+      assertEquals(Set.of("west"), app.territoryGapIds(app.savedMap("main-0")));
+      assertEquals(2, app.territoryGaps("main-0", "all", null, null, 0, 1).get("total"));
+
+      var draft = app.open("gm:test", "main-0", root.stateHash(), null);
+      String draftId = (String) draft.get("draftId");
+      var evidence = Map.of("source", "fixture", "status", "inferred");
+      app.apply("gm:test", draftId, 0, "assign", List.of(
+          Map.of("op", "putCountry", "country", Map.of("id", "WEST", "name", "Westland", "evidence", evidence)),
+          Map.of("op", "setTerritory", "provinceIds", List.of("west"), "field", "owner",
+              "assignment", Map.of("countryId", "WEST", "evidence", evidence))), false);
+      app.save("gm:test", draftId, 1, "save", 1, root.stateHash());
+      assertTrue(app.territoryGapIds(app.savedMap("main-1")).isEmpty());
+      assertEquals(1, app.territoryGaps("main-1", "all", null, null, 0, 1).get("total"));
+      assertEquals(Set.of("west"), app.territoryGapIds(app.savedMap("main-0")));
+
+      encoded.put("baseHash", "sha256:" + "0".repeat(64));
+      Files.writeString(path, JsonCodec.canonicalJson(encoded));
+      var fresh = new WorldApplicationService(store);
+      assertEquals("GEO_REFERENCE_INVALID", assertThrows(TimelineException.class,
+          () -> fresh.geoLookup("main-0", "West", null, null, null)).code());
+    }
+  }
+
   @Test
   void previewsAtomicallySavesAndRetriesAfterRestart(@TempDir Path temp) throws Exception {
     Path world = temp.resolve("world");

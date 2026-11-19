@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -130,6 +131,16 @@ public final class WorldViewerServer implements AutoCloseable {
             integer(query.getOrDefault("offset", "0"), "offset"),
             integer(query.getOrDefault("limit", "25"), "limit")));
       }
+      case "/api/geography" -> {
+        SavedMap saved = snapshot(query);
+        json(exchange, 200, app.geoLookup(saved.node().label(), query.get("name"),
+            query.containsKey("longitude") ? coordinate(query, "longitude") : null,
+            query.containsKey("latitude") ? coordinate(query, "latitude") : null, null));
+      }
+      case "/api/geography/borders" -> json(exchange, 200, app.geoOverlay(snapshot(query).node().label()));
+      case "/api/territory/gaps" -> json(exchange, 200, app.territoryGaps(snapshot(query).node().label(),
+          query.get("scope"), query.get("countryId"), query.get("stateId"),
+          integer(query.getOrDefault("offset", "0"), "offset"), integer(query.getOrDefault("limit", "25"), "limit")));
       case "/api/units" -> json(exchange, 200, app.unitMarkers(snapshot(query).node().label()));
       case "/api/pick" -> {
         SavedMap saved = snapshot(query);
@@ -162,7 +173,8 @@ public final class WorldViewerServer implements AutoCloseable {
         Map.entry("states", map.states().size()), Map.entry("regions", map.strategicRegions().size()),
         Map.entry("supplyHubs", map.supplyHubs().size()), Map.entry("railways", map.railways().size()),
         Map.entry("countries", saved.state().countries().countries().size()),
-        Map.entry("units", saved.state().formations().units().size()));
+        Map.entry("units", saved.state().formations().units().size()),
+        Map.entry("geographicReference", app.hasGeographicReference()));
   }
 
   private Map<String, Object> province(SavedMap saved, NodeAddress address) {
@@ -173,6 +185,14 @@ public final class WorldViewerServer implements AutoCloseable {
     }
     Map<String, Object> result = app.lookup(address.canonical(), true);
     Province province = (Province) result.get("entity");
+    if (app.hasGeographicReference()) {
+      try {
+        Object position = app.geoPosition(saved, province).get("position");
+        if (position != null) result.put("geographicPosition", position);
+      } catch (TimelineException e) {
+        if (!e.code().equals("GEO_REFERENCE_INVALID")) throw e;
+      }
+    }
     if (province.stateId() != null) result.put("stateName", saved.map().states().get(province.stateId()).name());
     if (province.regionId() != null) result.put("regionName", saved.map().strategicRegions().get(province.regionId()).name());
     var countries = saved.state().countries();
@@ -209,8 +229,10 @@ public final class WorldViewerServer implements AutoCloseable {
     if (tile && !ViewerMap.validTile(saved.map(), level, x, y)) {
       throw new IllegalArgumentException("瓦片超出地图范围或缩放级别");
     }
-    byte[] png = frame(saved).image(layer, level, x, y, saved.state().countries());
-    exchange.getResponseHeaders().set("Cache-Control", "private, max-age=300");
+    boolean debug = layer == ViewerMap.Layer.OWNER_GAPS;
+    Set<String> gaps = debug ? app.territoryGapIds(saved) : Set.of();
+    byte[] png = frame(saved).image(layer, level, x, y, saved.state().countries(), gaps);
+    if (!debug) exchange.getResponseHeaders().set("Cache-Control", "private, max-age=300");
     send(exchange, 200, "image/png", png);
   }
 

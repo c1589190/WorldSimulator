@@ -23,6 +23,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** Derived render and picking data for a committed map. */
 final class ViewerMap {
@@ -34,6 +35,7 @@ final class ViewerMap {
   private static final Color SEA = new Color(0x223f51);
   private static final Color LAKE = new Color(0x5c879b);
   private static final Color LAND = new Color(0xc5c3b2);
+  private static final Color MISSING_OWNER = new Color(0xff66ba);
   private static final Color LAND_BORDER = new Color(43, 52, 53, 95);
   private static final Color WATER_BORDER = new Color(128, 161, 177, 63);
   private static final Map<String, Color> TERRAIN = Map.of(
@@ -43,7 +45,7 @@ final class ViewerMap {
       "marsh", new Color(0xadc1a5), "jungle", new Color(0x90af85));
 
   enum Layer {
-    TERRAIN, STATE, REGION, OWNER, CONTROLLER;
+    TERRAIN, STATE, REGION, OWNER, CONTROLLER, OWNER_GAPS;
 
     static Layer parse(String text) {
       return switch (text) {
@@ -52,13 +54,14 @@ final class ViewerMap {
         case "region" -> REGION;
         case "owner" -> OWNER;
         case "controller" -> CONTROLLER;
+        case "owner-gaps" -> OWNER_GAPS;
         default -> throw new IllegalArgumentException("未知地图图层: " + text);
       };
     }
   }
 
   private record Drawing(Province province, Path2D path) {}
-  private record ImageKey(Layer layer, int level, int x, int y, CountryState politics) {}
+  private record ImageKey(Layer layer, int level, int x, int y, CountryState politics, Set<String> gaps) {}
 
   private final WorldMap map;
   private final STRtree index = new STRtree();
@@ -99,8 +102,12 @@ final class ViewerMap {
     return null;
   }
 
-  synchronized byte[] image(Layer layer, int level, int x, int y, CountryState politics) throws IOException {
-    ImageKey key = new ImageKey(layer, level, x, y, layer == Layer.OWNER || layer == Layer.CONTROLLER ? politics : null);
+  synchronized byte[] image(Layer layer, int level, int x, int y, CountryState politics, Set<String> gaps) throws IOException {
+    var coloring = switch (layer) {
+      case OWNER, CONTROLLER, OWNER_GAPS -> politics;
+      default -> null;
+    };
+    var key = new ImageKey(layer, level, x, y, coloring, gaps);
     byte[] cached = images.get(key);
     if (cached != null) return cached;
     byte[] png = render(key);
@@ -174,9 +181,10 @@ final class ViewerMap {
 
   private static Color fill(ImageKey key, Province province) {
     Layer layer = key.layer();
+    if (layer == Layer.OWNER_GAPS && key.gaps().contains(province.id())) return MISSING_OWNER;
     if (key.politics() != null) {
       var territory = key.politics().territories().get(province.id());
-      var assignment = territory == null ? null : layer == Layer.OWNER ? territory.owner() : territory.controller();
+      var assignment = territory == null ? null : layer == Layer.CONTROLLER ? territory.controller() : territory.owner();
       if (assignment != null) {
         var country = key.politics().countries().get(assignment.countryId());
         return country.color() == null ? groupColor(country.id(), false) : Color.decode(country.color());

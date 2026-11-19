@@ -31,6 +31,10 @@
 | D-023 | 2026-11-19 | 用户原话 | 略缩小兵牌，缩小时先聚合再隐藏，用同地点的多个单位验收 | [原稿 §16](specs/2026-11-17-worldsim-architecture-design-source.md)、[查看器专题](specs/2026-11-19-readonly-map-viewer.md) | 有效，补充 D-022 |
 | D-024 | 2026-11-19 | 用户原话 | 同地的同级顶层单位分别出牌，下属编制在各顶层单位内部显示，再缩小兵牌 | [原稿 §17](specs/2026-11-17-worldsim-architecture-design-source.md)、[查看器专题](specs/2026-11-19-readonly-map-viewer.md) | 有效，细化 D-023 的验收样例 |
 | D-025 | 2026-11-19 | 用户原话 | 在浏览器内独立窗口用结构图查看顶层单位的编制 | [原稿 §18](specs/2026-11-17-worldsim-architecture-design-source.md)、[查看器专题](specs/2026-11-19-readonly-map-viewer.md) | 有效，调整 D-022 的编制查看位置和布局 |
+| D-026 | 2026-11-19 | 用户原话 | 在现有欧洲地图上构建可玩的 1936 剧本，先接外部地图与剧本导入，通过程序工具建设世界并验收 Agent 推演 | [原稿 §19](specs/2026-11-17-worldsim-architecture-design-source.md)、[推演契约](specs/2026-11-19-1936-europe-agent-turns.md) | 有效 |
+| D-027 | 2026-11-19 | 用户原话 | 1936 剧本与后续推演尽量贴近史实 | [原稿 §20](specs/2026-11-17-worldsim-architecture-design-source.md)、[推演契约](specs/2026-11-19-1936-europe-agent-turns.md) | 有效 |
+| D-028 | 2026-11-19 | 用户原话 | 决策人读取 GM 管理的可见信息并提交决策，GM 统一推演并生成下一回合 | [原稿 §20](specs/2026-11-17-worldsim-architecture-design-source.md)、[推演契约](specs/2026-11-19-1936-europe-agent-turns.md) | 有效，细化后续决策人权限 |
+| D-029 | 2026-11-19 | 用户原话 | 提供调试显示，供人和 Agent 查看及补齐地图缺项 | [推演契约 §7](specs/2026-11-19-1936-europe-agent-turns.md#7-边界复核归属调试与师级序列) | 有效 |
 
 ## 仍待裁定的工程问题
 

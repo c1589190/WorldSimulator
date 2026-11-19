@@ -9,6 +9,7 @@ const nodes = $('nodes');
 const queryInput = $('province-query');
 const railwayToggle = $('railways');
 const hubToggle = $('hubs');
+const borderToggle = $('geo-borders');
 const unitToggle = $('units');
 const unitZoomNote = $('unit-zoom-note');
 const militaryPanel = $('military-panel');
@@ -122,6 +123,9 @@ async function loadMap(node) {
       for (const entry of [...view.overview.values(), ...view.tiles.values()]) discardImage(entry);
     }
     view = { info, overview: new Map(), tiles: new Map(), requests: new AbortController() };
+    $('geo-border-option').hidden = !info.geographicReference;
+    $('geo-border-source').hidden = true;
+    queryInput.placeholder = info.geographicReference ? '地名、地址或经度,纬度' : '名称、实体 ID 或节点地址';
     const location = new URL(window.location.href);
     if (node || location.searchParams.has('node')) {
       location.searchParams.set('node', info.node);
@@ -137,6 +141,8 @@ async function loadMap(node) {
     updateNodes();
     fitMap();
     loadLogistics();
+    loadGeographicBorders();
+    loadTerritoryGaps();
     loadUnits();
     return view;
   } catch (error) {
@@ -290,6 +296,7 @@ function draw() {
     base.picture.naturalWidth / info.overviewScale, base.picture.naturalHeight / info.overviewScale);
   drawTiles();
   drawLogistics();
+  drawGeographicBorders();
   drawSelection();
   context.restore();
   if (!belowCounterZoom) drawUnits(relativeZoom);
@@ -344,6 +351,53 @@ async function loadLogistics() {
   } finally {
     target.loadingLogistics = false;
   }
+}
+
+async function loadGeographicBorders() {
+  const target = view;
+  const source = $('geo-border-source');
+  source.hidden = !(target?.info.geographicReference && borderToggle.checked && target.geographicBorders);
+  if (!target?.info.geographicReference || !borderToggle.checked || target.geographicBorders || target.loadingBorders) return;
+  target.loadingBorders = true;
+  try {
+    const { borders } = await json('/api/geography/borders', version(target), target.requests.signal);
+    if (view !== target) return;
+    const paths = new Path2D();
+    for (const border of borders) {
+      for (const line of border.paths) {
+        paths.moveTo(line[0].x, line[0].y);
+        for (const point of line.slice(1)) paths.lineTo(point.x, point.y);
+      }
+    }
+    target.geographicBorders = paths;
+    source.textContent = borders.length ? borders.map(border => border.name).join('、') + ' · ' + borders[0].date : '当前图幅暂无参考边界';
+    if (borders.length && /^https?:\/\//.test(borders[0].source)) {
+      const link = textElement('a', '来源');
+      link.href = borders[0].source;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      source.append(' · ', link);
+    }
+    source.hidden = !borderToggle.checked;
+    scheduleDraw();
+  } catch (error) {
+    if (!target.requests.signal.aborted) status('史料边界读取失败 · ' + error.message);
+  } finally {
+    target.loadingBorders = false;
+  }
+}
+
+function drawGeographicBorders() {
+  if (!borderToggle.checked || !view.geographicBorders) return;
+  context.save();
+  context.setLineDash([6 / scale, 3 / scale]);
+  context.strokeStyle = '#472e20';
+  context.lineWidth = 3.6 / scale;
+  context.stroke(view.geographicBorders);
+  context.strokeStyle = '#f8d990';
+  context.lineWidth = 1.65 / scale;
+  context.stroke(view.geographicBorders);
+  context.restore();
 }
 
 function drawLogistics() {
@@ -441,6 +495,14 @@ function selectProvince(result) {
     $('province-kind').textContent = kindNames[province.kind] || province.kind;
     $('province-id').textContent = province.id;
     $('province-terrain').textContent = terrainNames[province.terrain] || province.terrain;
+    $('province-geography-row').hidden = !result.geographicPosition;
+    if (result.geographicPosition) {
+      const longitude = result.geographicPosition.longitude.toFixed(3);
+      const latitude = result.geographicPosition.latitude.toFixed(3);
+      const link = $('province-geography');
+      link.textContent = longitude + ', ' + latitude;
+      link.href = `https://www.openstreetmap.org/?mlat=${latitude}&mlon=${longitude}#map=10/${latitude}/${longitude}`;
+    }
     $('province-state').textContent = result.stateName || province.stateId || '—';
     $('province-region').textContent = result.regionName || province.regionId || '—';
     $('province-owner-row').hidden = !view.info.countries;
@@ -662,6 +724,14 @@ async function searchEntities(query) {
   try {
     const page = await json('/api/search', { ...version(target), query, limit: 25 }, request.signal);
     if (view !== target || request.signal.aborted) return;
+    if (page.total !== 1 && target.info.geographicReference) {
+      const geo = await json('/api/geography', { ...version(target), name: query }, request.signal).catch(() => null);
+      if (view !== target || request.signal.aborted) return;
+      if (geo?.candidates.length) {
+        await showGeographicResult(geo);
+        return;
+      }
+    }
     if (page.total === 1) {
       await openEntity(page.matches[0].address);
     } else if (page.total === 0) {
@@ -675,6 +745,37 @@ async function searchEntities(query) {
     }
   } catch (error) {
     if (!request.signal.aborted) searchStatus(error.message, true);
+  }
+}
+
+async function findCoordinates(longitude, latitude) {
+  const target = view;
+  selectionRequest?.abort();
+  const request = new AbortController();
+  selectionRequest = request;
+  clearSearchResults();
+  searchStatus();
+  try {
+    const result = await json('/api/geography', { ...version(target), longitude, latitude }, request.signal);
+    if (view !== target || request.signal.aborted) return;
+    await showGeographicResult(result);
+  } catch (error) {
+    if (!request.signal.aborted) searchStatus(error.message, true);
+  }
+}
+
+async function showGeographicResult(result) {
+  if (result.status === 'resolved') {
+    await openEntity(result.candidates[0].address);
+  } else if (result.candidates.length) {
+    $('search-results').replaceChildren(...result.candidates.map(match =>
+      listLink(match.name + ' · 省 ' + match.provinceId, match.address)));
+    $('search-results').hidden = false;
+    const margin = result.point ? '（配准误差 ' + number.format(result.errorRadius) + ' 个地图坐标单位）' : '';
+    searchStatus('查到 ' + result.candidates.length + ' 个候选' + margin + '，请核对后选择。');
+  } else {
+    searchStatus({ unavailable: '此世界尚无地理参考。', 'outside-coverage': '坐标在已配准图幅外。' }[result.status]
+      || '没有找到候选省份。');
   }
 }
 
@@ -721,11 +822,47 @@ function showLegend() {
       state: '陆地颜色按省份所属的州分组。',
       region: '颜色按省份所属的战略区域分组。',
       owner: '有归属记录的省按国家着色。',
-      controller: '有控制记录的省按实际控制方着色。'
+      controller: '有控制记录的省按实际控制方着色。',
+      'owner-gaps': '粉色标出待补归属的陆省。'
     }[layer];
     items.push(note);
   }
   $('legend').replaceChildren(...items);
+}
+
+async function loadTerritoryGaps(offset = 0) {
+  const panel = $('territory-gaps');
+  const target = view;
+  panel.hidden = layer !== 'owner-gaps' || !target;
+  if (panel.hidden) return;
+  const summary = $('territory-gap-status');
+  const list = $('territory-gap-list');
+  const more = $('more-territory-gaps');
+  const request = {};
+  target.gapRequest = request;
+  more.disabled = true;
+  if (!offset) {
+    list.replaceChildren();
+    more.hidden = true;
+    summary.textContent = '正在核对省份…';
+  }
+  try {
+    const result = await json('/api/territory/gaps', { ...version(target), offset, limit: 8 }, target.requests.signal);
+    if (view !== target || target.gapRequest !== request || layer !== 'owner-gaps') return;
+    const scope = result.scope === 'reference' ? result.referenceDate + ' 史料范围' : '全图';
+    summary.textContent = scope + ' · 待补 ' + number.format(result.total) + ' 省';
+    list.append(...result.gaps.map(gap => listLink(
+      [gap.name, '省 ' + gap.provinceId, gap.stateName, gap.expectedCountryId].filter(Boolean).join(' · '), gap.address)));
+    const next = result.offset + result.gaps.length;
+    more.dataset.offset = next;
+    more.hidden = next >= result.total;
+  } catch (error) {
+    if (view === target && target.gapRequest === request && layer === 'owner-gaps') {
+      summary.textContent = '归属调试读取失败 · ' + error.message;
+    }
+  } finally {
+    if (view === target && target.gapRequest === request) more.disabled = false;
+  }
 }
 
 function cursor(event) {
@@ -814,7 +951,9 @@ $('search').addEventListener('submit', async (event) => {
   if (!view || mapRequest) return;
   const value = queryInput.value.trim();
   if (!value) return;
-  if (value.includes('/')) await openEntity(value);
+  const coordinates = /^([+-]?(?:\d+\.?\d*|\.\d+))\s*[,，]\s*([+-]?(?:\d+\.?\d*|\.\d+))$/.exec(value);
+  if (coordinates) await findCoordinates(coordinates[1], coordinates[2]);
+  else if (value.includes('/')) await openEntity(value);
   else if (/^\d+$/.test(value)) await openEntity(view.info.node + '/map/province/' + value);
   else await searchEntities(value);
 });
@@ -852,20 +991,34 @@ function closeMilitary() {
   setArmyState(null);
   canvas.focus({ preventScroll: true });
 }
+const requestedLayer = new URLSearchParams(window.location.search).get('layer');
 document.querySelectorAll('input[name="layer"]').forEach((input) => {
+  if (input.value === requestedLayer) {
+    layer = requestedLayer;
+    input.checked = true;
+  }
   input.addEventListener('change', () => {
     layer = input.value;
+    const location = new URL(window.location.href);
+    location.searchParams.set('layer', layer);
+    window.history.replaceState(null, '', location);
     status();
     showLegend();
+    loadTerritoryGaps();
     scheduleDraw();
   });
 });
+$('more-territory-gaps').addEventListener('click', () => loadTerritoryGaps(Number($('more-territory-gaps').dataset.offset)));
 for (const toggle of [railwayToggle, hubToggle]) {
   toggle.addEventListener('change', () => {
     loadLogistics();
     scheduleDraw();
   });
 }
+borderToggle.addEventListener('change', () => {
+  loadGeographicBorders();
+  scheduleDraw();
+});
 unitToggle.addEventListener('change', () => {
   loadUnits();
   scheduleDraw();

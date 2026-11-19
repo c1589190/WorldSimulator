@@ -58,18 +58,21 @@
           <label><input type="radio" name="layer" value="region"><span>战略区域</span></label>
           <label><input type="radio" name="layer" value="owner"><span>国家归属</span></label>
           <label><input type="radio" name="layer" value="controller"><span>实际控制</span></label>
+          <label><input type="radio" name="layer" value="owner-gaps"><span>归属调试</span></label>
         </fieldset>
         <div class="overlay-picker">
           <label><input id="railways" type="checkbox"><span class="rail-key"></span>铁路示意</label>
           <label><input id="hubs" type="checkbox"><span class="hub-key"></span>补给中心</label>
           <label><input id="units" type="checkbox" checked><span class="unit-key"></span>兵牌</label>
+          <label id="geo-border-option" hidden><input id="geo-borders" type="checkbox"><span class="geo-key"></span>史料边界</label>
         </div>
+        <p id="geo-border-source" class="entity-source geo-border-source" hidden></p>
       </section>
 
       <section class="pane province-pane" aria-labelledby="province-heading">
         <h2 id="province-heading">查找</h2>
         <form id="search" role="search">
-          <label class="visually-hidden" for="province-query">名称、实体 ID 或节点地址</label>
+          <label class="visually-hidden" for="province-query">名称、实体地址或经纬度</label>
           <input id="province-query" maxlength="512" type="search" placeholder="名称、实体 ID 或节点地址"
             autocomplete="off" spellcheck="false" required>
           <button type="submit" class="primary">定位</button>
@@ -86,6 +89,8 @@
           <dl class="province-facts">
             <div><dt>省 ID</dt><dd id="province-id"></dd></div>
             <div><dt>地形</dt><dd id="province-terrain"></dd></div>
+            <div id="province-geography-row" hidden><dt>近似经纬度</dt><dd class="entity-source"><a
+              id="province-geography" target="_blank" rel="noopener noreferrer" title="在 OpenStreetMap 核对位置"></a></dd></div>
             <div><dt>州</dt><dd id="province-state"></dd></div>
             <div><dt>战略区域</dt><dd id="province-region"></dd></div>
             <div id="province-owner-row" hidden><dt>归属</dt><dd id="province-owner"></dd></div>
@@ -119,6 +124,11 @@
       <section class="pane legend-pane" aria-labelledby="legend-heading">
         <h2 id="legend-heading">图例</h2>
         <ul id="legend"></ul>
+        <div id="territory-gaps" hidden>
+          <p id="territory-gap-status" class="search-status" role="status"></p>
+          <ul id="territory-gap-list" class="entity-links"></ul>
+          <button id="more-territory-gaps" type="button" class="quiet" hidden>更多待补省</button>
+        </div>
       </section>
     </aside>
   </main>

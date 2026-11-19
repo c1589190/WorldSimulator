@@ -65,7 +65,7 @@ WorldSimulator 是一个 **Agent 导向的世界模拟器/编辑器**。它的�
    资源、人口、装备、编制、归属、战斗数据必须记录 `source` / `status` / `confidence`；没有证据就不补造“看起来合理”的数字。
 
 6. **Agent 工具面按角色和视野收窄。**  
-   GM 才能改地图/时间线；DM 只能读自己的 INFO、编辑/提交自己的编制或经审批的军队动作。工具权限不能靠提示词约束。
+   GM 管理决策人可见的信息并统一推演及保存下一回合。决策人 Agent 读取获准的信息并提交决策。服务端执行工具权限。[用户设计原稿 §20](docs/superpowers/specs/2026-11-17-worldsim-architecture-design-source.md)
 
 ## 3. 文档路由
 

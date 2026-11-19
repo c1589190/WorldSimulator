@@ -20,7 +20,7 @@ public final class WorldExport {
       if (relative.equals("world.json")) continue;
       DurableFiles.writeNew(world.resolve(staging + "/" + relative), DurableFiles.read(world.resolve(relative)));
     }
-    for (String report : List.of("provenance.json", "migration-report.json", "import-report.json")) {
+    for (String report : List.of("provenance.json", "migration-report.json", "import-report.json", "geo-reference.json")) {
       if (Files.isRegularFile(world.resolve(report))) {
         DurableFiles.writeNew(world.resolve(staging + "/" + report), DurableFiles.read(world.resolve(report)));
       }
