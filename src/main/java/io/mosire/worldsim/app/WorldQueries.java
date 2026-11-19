@@ -4,9 +4,12 @@ import io.mosire.worldsim.address.AddressException;
 import io.mosire.worldsim.address.NodeAddress;
 import io.mosire.worldsim.address.NodeRef;
 import io.mosire.worldsim.map.Vec2;
+import io.mosire.worldsim.orbat.March;
+import io.mosire.worldsim.orbat.Battle;
 import io.mosire.worldsim.orbat.OrbatDocument;
 import io.mosire.worldsim.orbat.OrbatState;
 import io.mosire.worldsim.state.StaticWorldState;
+import io.mosire.worldsim.state.Evidence;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -23,12 +26,24 @@ final class WorldQueries {
   record UnitMarker(String stableId, String address, String name, String provinceAddress, Vec2 point,
                     String provinceName, String type, String echelon,
                     String countryId, String countryColor) {}
+  record MarchMarker(String unitAddress, String name, String provinceAddress, String status,
+                     String startedAt, String arrivalTime, String cancelledAt, double speedKmPerHour, Evidence evidence,
+                     List<String> route, List<March.Leg> legs, List<Vec2> points, Vec2 point, int reachedLegs, double fraction,
+                     March.Blockage blockage) {}
+  record BattleParticipant(String address, String name) {}
+  record BattleMarker(String kind, String stableId, String address, String name, String provinceAddress,
+                      Vec2 point, String provinceName) {}
   private record QuantityDifference(int ideal, int actual, int delta, boolean estimated) {}
   private record EquipmentDifference(String itemId, String name, QuantityDifference quantity) {}
 
   static Map<String, Object> lookup(StaticWorldState state, NodeAddress address, String hash) {
     List<String> path = address.requireEntityPath().path();
     NodeRef node = address.node();
+    if (path.size() == 3 && path.getFirst().equals("orbat") && path.get(1).equals("battle")) {
+      var battle = state.formations().battles().get(path.getLast());
+      if (battle == null) throw missing(address);
+      return battle(state, node, hash, battle);
+    }
     if (path.getFirst().equals("country") && path.size() == 2) {
       var country = state.countries().countries().get(path.get(1));
       if (country == null) throw missing(address);
@@ -41,17 +56,18 @@ final class WorldQueries {
           .filter(t -> t.owner() != null && t.owner().countryId().equals(country.id())).count());
       result.put("controlledProvinces", territories.stream()
           .filter(t -> t.controller() != null && t.controller().countryId().equals(country.id())).count());
+      var grants = state.countries().transitRights().get(country.id());
+      if (grants != null) result.put("transitRightsGranted", grants);
       return result;
     }
     if (path.size() == 3 && path.getFirst().equals("orbat") && path.get(1).equals("unit")) {
-      var unit = state.formations().units().get(path.get(2));
-      if (unit == null) throw missing(address);
+      var unit = unit(state, address);
       var result = result(address, hash, "unit", "unit:" + unit.id(), unit.name(), unit);
       if (unit.provinceId() != null) {
         var province = state.map().provinces().get(unit.provinceId());
         result.put("provinceAddress", address(node, "map", "province", unit.provinceId()));
         result.put("provinceName", province.name());
-        result.put("point", province.displayPoint());
+        result.put("point", unitPoint(state, unit, province.displayPoint()));
       }
       if (unit.countryId() != null) {
         var country = state.countries().countries().get(unit.countryId());
@@ -80,7 +96,15 @@ final class WorldQueries {
     return result;
   }
 
-  private static OrbatDocument.Node formationsNode(OrbatState orbat, OrbatState.Ref reference) {
+  static OrbatState.Unit unit(StaticWorldState state, NodeAddress address) {
+    var path = address.requireEntityPath().path();
+    if (path.size() != 3 || !path.getFirst().equals("orbat") || !path.get(1).equals("unit")) throw invalid(address);
+    var unit = state.formations().units().get(path.get(2));
+    if (unit == null) throw missing(address);
+    return unit;
+  }
+
+  static OrbatDocument.Node formationsNode(OrbatState orbat, OrbatState.Ref reference) {
     return orbat.findDocument(reference.documentId(), reference.contentHash()).findNode(reference.nodeId());
   }
 
@@ -151,10 +175,73 @@ final class WorldQueries {
           String type = label(unit.type(), actual == null ? null : actual.type(), ideal == null ? null : ideal.type());
           String echelon = label(actual == null ? null : actual.echelon(), ideal == null ? null : ideal.echelon());
           return new UnitMarker("unit:" + unit.id(), address(node, "orbat", "unit", unit.id()), unit.name(),
-              address(node, "map", "province", unit.provinceId()), province.displayPoint(),
+              address(node, "map", "province", unit.provinceId()), unitPoint(state, unit, province.displayPoint()),
               province.name(), type, echelon, unit.countryId(), country == null ? null : country.color());
         })
         .toList();
+  }
+
+  static List<MarchMarker> marches(StaticWorldState state, NodeRef node) {
+    return state.formations().marches().entrySet().stream().sorted(Map.Entry.comparingByKey()).map(entry -> {
+      var unit = state.formations().units().get(entry.getKey());
+      var march = entry.getValue();
+      var progress = march.progress(state.simulationTime());
+      var ids = new ArrayList<String>();
+      ids.add(march.legs().getFirst().from());
+      march.legs().forEach(leg -> ids.add(leg.to()));
+      var route = ids.stream().map(id -> address(node, "map", "province", id)).toList();
+      var provinces = state.map().provinces();
+      List<Vec2> points = ids.stream().allMatch(provinces::containsKey)
+          ? ids.stream().map(id -> provinces.get(id).displayPoint()).toList() : List.of();
+      return new MarchMarker(address(node, "orbat", "unit", unit.id()), unit.name(),
+          address(node, "map", "province", unit.provinceId()), progress.status(), march.startedAt(), march.arrivalTime(),
+          march.cancelledAt(), march.speedKmPerHour(), march.evidence(), route, march.legs(), points,
+          unitPoint(state, unit, provinces.get(unit.provinceId()).displayPoint()), progress.reachedLegs(), progress.fraction(),
+          march.blockage());
+    }).toList();
+  }
+
+  static BattleMarker battleMarker(StaticWorldState state, NodeRef node, Battle battle) {
+    var place = state.map().provinces().get(battle.provinceId());
+    if (place == null) return null;
+    return new BattleMarker("battle", "battle:" + battle.id(), address(node, "orbat", "battle", battle.id()),
+        place.name() + " · " + battle.id(), address(node, "map", "province", place.id()),
+        place.displayPoint(), place.name());
+  }
+
+  static Map<String, Object> battle(StaticWorldState state, NodeRef node, String hash, Battle battle) {
+    var place = state.map().provinces().get(battle.provinceId());
+    String name = place == null ? battle.provinceId() : place.name();
+    var result = result(new NodeAddress(node, List.of("orbat", "battle", battle.id())), hash,
+        "battle", "battle:" + battle.id(), name + " · " + battle.id(), battle);
+    if (place != null) {
+      result.put("provinceAddress", address(node, "map", "province", place.id()));
+      result.put("point", place.displayPoint());
+    }
+    result.put("attackers", participants(state.formations(), node, battle.attackers()));
+    result.put("defenders", participants(state.formations(), node, battle.defenders()));
+    if (battle.control() != null) {
+      var country = state.countries().countries().get(battle.control().countryId());
+      if (country != null) result.put("controllerName", country.name());
+    }
+    return result;
+  }
+
+  private static List<BattleParticipant> participants(OrbatState orbat, NodeRef node, List<String> ids) {
+    return ids.stream().map(id -> {
+      var unit = orbat.units().get(id);
+      return new BattleParticipant(address(node, "orbat", "unit", id), unit == null ? id : unit.name());
+    }).toList();
+  }
+
+  private static Vec2 unitPoint(StaticWorldState state, OrbatState.Unit unit, Vec2 provincePoint) {
+    var march = state.formations().marches().get(unit.id());
+    if (march == null) return provincePoint;
+    var progress = march.progress(state.simulationTime());
+    if (!progress.moving()) return provincePoint;
+    Vec2 next = state.map().provinces().get(march.legs().get(progress.reachedLegs()).to()).displayPoint();
+    return new Vec2(provincePoint.x() + (next.x() - provincePoint.x()) * progress.fraction(),
+        provincePoint.y() + (next.y() - provincePoint.y()) * progress.fraction());
   }
 
   private static String label(String... labels) {
@@ -168,7 +255,7 @@ final class WorldQueries {
     return new NodeAddress(node, List.of(path)).canonical();
   }
 
-  private static String formationAddress(NodeRef node, OrbatState.Ref reference) {
+  static String formationAddress(NodeRef node, OrbatState.Ref reference) {
     var path = new ArrayList<>(List.of("orbat", "doc", reference.documentId()));
     if (reference.contentHash() != null) {
       path.add("version");

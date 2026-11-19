@@ -87,8 +87,27 @@ public record OrbatDocument(String format, String documentId, String role, Strin
     }
   }
 
+  public record MarchSpeed(double kmPerHour, Evidence evidence) {
+    public MarchSpeed {
+      if (!Double.isFinite(kmPerHour) || kmPerHour < 0) {
+        throw new IllegalArgumentException("行军速度须为非负有限数");
+      }
+      if (evidence == null || !Set.of("known", "estimated", "inferred").contains(evidence.status())) {
+        throw new IllegalArgumentException("行军速度须有来源，未知速度可省略");
+      }
+    }
+
+    @JsonCreator
+    public static MarchSpeed fromJson(@JsonProperty("kmPerHour") JsonNode speed,
+                                      @JsonProperty("evidence") Evidence evidence) {
+      if (speed == null || !speed.isNumber()) throw new IllegalArgumentException("行军速度须为数值");
+      return new MarchSpeed(speed.doubleValue(), evidence);
+    }
+  }
+
   public record Node(String nodeId, String name, String type, String echelon, Quantity personnel,
-                     Inventory equipment, List<Node> children, Map<String, Extension> extensions) {
+                     Inventory equipment, List<Node> children, Map<String, Extension> extensions,
+                     MarchSpeed marchSpeed) {
     public Node {
       NodeAddress.requireSegment(nodeId);
       if (name == null || name.isBlank()) throw new IllegalArgumentException("编制节点名称不得为空");
@@ -97,6 +116,11 @@ public record OrbatDocument(String format, String documentId, String role, Strin
       children = children == null ? List.of() : List.copyOf(children);
       extensions = extensions == null ? Map.of() : Map.copyOf(extensions);
       if (extensions.keySet().stream().anyMatch(String::isBlank)) throw new IllegalArgumentException("编制扩展需要命名空间");
+    }
+
+    public Node(String nodeId, String name, String type, String echelon, Quantity personnel,
+                Inventory equipment, List<Node> children, Map<String, Extension> extensions) {
+      this(nodeId, name, type, echelon, personnel, equipment, children, extensions, null);
     }
   }
 
@@ -117,6 +141,10 @@ public record OrbatDocument(String format, String documentId, String role, Strin
   }
 
   public Node findNode(String id) {
+    return findNode(root, id);
+  }
+
+  static Node findNode(Node root, String id) {
     var queue = new ArrayDeque<Node>();
     queue.add(root);
     while (!queue.isEmpty()) {
@@ -127,6 +155,17 @@ public record OrbatDocument(String format, String documentId, String role, Strin
     return null;
   }
 
+  OrbatDocument replaceNode(Node replacement) {
+    return new OrbatDocument(format, documentId, role, date, replace(root, replacement));
+  }
+
+  private static Node replace(Node node, Node replacement) {
+    if (node.nodeId().equals(replacement.nodeId())) return replacement;
+    if (node.children().isEmpty()) return node;
+    var children = node.children().stream().map(child -> replace(child, replacement)).toList();
+    return new Node(node.nodeId(), node.name(), node.type(), node.echelon(), node.personnel(),
+        node.equipment(), children, node.extensions(), node.marchSpeed());
+  }
   public String contentHash() {
     return JsonCodec.sha256(JsonCodec.canonicalJson(this));
   }

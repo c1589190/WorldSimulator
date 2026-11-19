@@ -63,9 +63,12 @@ final class WorldGeography {
     }
   }
 
+  record DistanceReference(String method, String source, String referenceHash, double mapErrorRadius) {}
+
   record Reference(String format, String sheet, String base, String baseHash, double width, double height,
                    String source, List<Vec2> coverage, List<Double> affine, double errorRadius,
-                   Check check, List<Place> places, List<Border> borders, TerritoryReference territory) {
+                   Check check, List<Place> places, List<Border> borders, TerritoryReference territory,
+                   RiverReference rivers) {
     Reference {
       if (!"worldsim-geo-v1".equals(format)) throw new IllegalArgumentException("未知地理参考格式");
       requireText(sheet);
@@ -89,6 +92,10 @@ final class WorldGeography {
       if (errorRadius < check.maxError()) throw new IllegalArgumentException("误差半径小于验收最大误差");
       places = List.copyOf(places);
       borders = List.copyOf(borders);
+      if (rivers != null && rivers.lines().stream().flatMap(line -> line.points().stream())
+          .anyMatch(point -> point.x() < 0 || point.x() > width || point.y() < 0 || point.y() > height)) {
+        throw new IllegalArgumentException("河流参考超出地图范围");
+      }
     }
   }
 
@@ -169,8 +176,24 @@ final class WorldGeography {
     result.put("places", reference.places().stream().filter(place -> place.provinceId().equals(province.id())).toList());
     var position = unproject(province.displayPoint());
     result.put("status", position == null ? "outside-coverage" : "estimated");
-    if (position != null) result.put("position", position);
+    if (position != null) result.put("position", Map.of("longitude", position.x(), "latitude", position.y()));
     return result;
+  }
+
+  DistanceReference distanceReference() {
+    return new DistanceReference("wgs84-great-circle", reference.source(), version, reference.errorRadius());
+  }
+
+  Double distanceKm(Vec2 from, Vec2 to) {
+    Vec2 a = unproject(from);
+    Vec2 b = unproject(to);
+    if (a == null || b == null) return null;
+    double halfLatitude = Math.toRadians(b.y() - a.y()) / 2;
+    double halfLongitude = Math.toRadians(b.x() - a.x()) / 2;
+    double haversine = Math.pow(Math.sin(halfLatitude), 2) + Math.pow(Math.sin(halfLongitude), 2)
+        * Math.cos(Math.toRadians(a.y())) * Math.cos(Math.toRadians(b.y()));
+    double meanEarthRadiusKm = 6371.0088;
+    return 2 * meanEarthRadiusKm * Math.asin(Math.sqrt(Math.min(1, haversine)));
   }
 
   private LinkedHashMap<String, Object> context(WorldApplicationService.SavedMap saved) {
@@ -198,7 +221,7 @@ final class WorldGeography {
     return new Vec2(a.get(0) + a.get(1) * x + a.get(2) * y, a.get(3) + a.get(4) * x + a.get(5) * y);
   }
 
-  private Map<String, Double> unproject(Vec2 point) {
+  private Vec2 unproject(Vec2 point) {
     var a = reference.affine();
     double x = point.x() - a.get(0);
     double y = point.y() - a.get(3);
@@ -208,7 +231,7 @@ final class WorldGeography {
     double latitude = Math.toDegrees((Math.atan(Math.exp(.8 * millerY)) - Math.PI / 4) / .4);
     if (!Double.isFinite(longitude) || !Double.isFinite(latitude)
         || !coverage.covers(JtsGeometry.point(new Vec2(longitude, latitude)))) return null;
-    return Map.of("longitude", longitude, "latitude", latitude);
+    return new Vec2(longitude, latitude);
   }
 
   private STRtree index(WorldMap map) {

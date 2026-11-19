@@ -19,12 +19,22 @@ public final class JsonCodec {
       .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
       .serializationInclusion(JsonInclude.Include.NON_NULL)
       .build();
+  private static final ObjectMapper INPUT_MAPPER = MAPPER.copy().setSerializationInclusion(JsonInclude.Include.ALWAYS);
 
   private JsonCodec() {}
 
   public static String canonicalJson(Object value) {
+    return canonicalJson(value, MAPPER);
+  }
+
+  /** Draft payload identity distinguishes an explicitly cleared field from a missing argument. */
+  public static String canonicalInputJson(Object value) {
+    return canonicalJson(value, INPUT_MAPPER);
+  }
+
+  private static String canonicalJson(Object value, ObjectMapper mapper) {
     try {
-      return MAPPER.writeValueAsString(value);
+      return mapper.writeValueAsString(value);
     } catch (JsonProcessingException e) {
       throw new IllegalArgumentException("无法序列化为规范 JSON: " + value.getClass().getName(), e);
     }

@@ -28,6 +28,7 @@
 | 节点 | `nodeId` 在同一文档内稳定且唯一。主干包括名称、类型、层级、本级直属人员与装备、`children`。已知的增配、缺口和实际下属结构都能表示。 |
 | 数量 | 统一使用 `value/status/source/confidence`。数量为非负整数或 `null`。已确认和估计分别标 `known`、`estimated`，都需记录来源。未知用 `unknown`，旧数据语义有歧义用 `legacy-ambiguous`，两者的有效数量为 `null`。置信度缺失保留 `null`。 |
 | 装备覆盖 | `equipment` 包含 `coverage` 和 `items`。覆盖取 `complete`、`partial` 或 `unknown`，完整的空表需要来源支持。每条装备记录含目录 ID 或来源名称及通用数量记录。 |
+| 行军速度 | 可选的 `marchSpeed` 保存直属行军单位的公里每小时与来源。[计算规则与工具](2026-11-20-unit-movement-duration.md) |
 | 扩展 | `extensions` 以模块命名空间为键，值保存对应版本及数据。通用读取和交换保留扩展内容。具体字段的校验、解释和展示交由所属单位模块。 |
 
 以下数量为格式示例。两侧编制均使用下列结构，通过 `role` 声明口径。

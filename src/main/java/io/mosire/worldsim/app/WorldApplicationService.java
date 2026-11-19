@@ -10,10 +10,12 @@ import io.mosire.worldsim.map.PolygonTopology;
 import io.mosire.worldsim.map.Province;
 import io.mosire.worldsim.map.WorldMap;
 import io.mosire.worldsim.orbat.MilOrgFormat;
+import io.mosire.worldsim.orbat.Battle;
 import io.mosire.worldsim.state.StaticWorldState;
 import io.mosire.worldsim.state.WorldChange;
 import io.mosire.worldsim.state.WorldChangeSet;
 import io.mosire.worldsim.timeline.CommitReceipt;
+import io.mosire.worldsim.timeline.SimulationTime;
 import io.mosire.worldsim.timeline.TimelineException;
 import io.mosire.worldsim.timeline.TimelineNode;
 import io.mosire.worldsim.timeline.TimelineService;
@@ -24,7 +26,10 @@ import io.mosire.worldsim.world.WorldView;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.time.LocalDate;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -41,7 +46,10 @@ public final class WorldApplicationService {
   public record SavedMap(NodeRef node, String stateHash, StaticWorldState state) {
     public WorldMap map() { return state.map(); }
   }
+  public record Clock(String time, String precision, String source) {}
 
+  private record CalendarAnchor(String node, String stateHash, String date, String source) {}
+  private record ScenarioCalendar(int formatVersion, List<CalendarAnchor> anchors) {}
   private record Applied(String requestHash, Map<String, Object> result) {}
   private record Preview(long version, String commandHash, StaticWorldState candidate, List<WorldChange> changes) {}
   private record GapScope(NodeRef node, boolean referenceOnly) {}
@@ -58,11 +66,10 @@ public final class WorldApplicationService {
 
   private final FileTimelineStore store;
   private final TimelineService timeline;
+  private final Map<NodeRef, Clock> clocks = new HashMap<>();
+  private Map<NodeRef, Clock> calendar;
   private WorldGeography geography;
   private final Map<String, Draft> drafts = new HashMap<>();
-  private final LinkedHashMap<NodeRef, StaticWorldState> cache = new LinkedHashMap<>(4, .75f, true) {
-    @Override protected boolean removeEldestEntry(Map.Entry<NodeRef, StaticWorldState> e) { return size() > 2; }
-  };
   private final LinkedHashMap<NodeRef, WorldSearchIndex> search = new LinkedHashMap<>(4, .75f, true) {
     @Override protected boolean removeEldestEntry(Map.Entry<NodeRef, WorldSearchIndex> e) { return size() > 2; }
   };
@@ -95,6 +102,7 @@ public final class WorldApplicationService {
     result.put("railways", map.railways().size()); result.put("branches", store.branches().size());
     result.put("countries", state.countries().countries().size());
     result.put("units", state.formations().units().size());
+    putClock(result, clock(ref));
     WorldProvenance.Result evidence = WorldProvenance.forNode(store, ref);
     if (evidence.document() != null) {
       result.put("provenanceSource", evidence.document().path("source"));
@@ -154,6 +162,11 @@ public final class WorldApplicationService {
 
   public boolean hasGeographicReference() {
     return Files.isRegularFile(store.world().resolve("geo-reference.json"));
+  }
+
+  public synchronized RiverReference riverReference(SavedMap saved) {
+    var source = geography(saved);
+    return source == null ? null : source.reference().rivers();
   }
 
   public synchronized Map<String, Object> geoLookup(String nodeLabel, String name, Double longitude, Double latitude,
@@ -272,6 +285,63 @@ public final class WorldApplicationService {
     return WorldQueries.unitMarkers(saved.state(), saved.node(), null);
   }
 
+  synchronized WorldMovement.Estimate movementEstimate(String text, String role, List<String> route) {
+    var address = NodeAddress.parse(text);
+    var saved = savedMap(address.node().label());
+    return WorldMovement.estimate(saved, address, role == null ? "actual" : role, route,
+        route == null ? null : geography(saved));
+  }
+
+  synchronized Map<String, Object> supplyStatus(String text) {
+    var address = NodeAddress.parse(text);
+    var saved = savedMap(address.node().label());
+    var unit = WorldQueries.unit(saved.state(), address);
+    var rules = new LandMarchRules(saved.state(), unit.countryId());
+    var result = new LinkedHashMap<String, Object>(Map.of("address", address.canonical(), "stateHash", saved.stateHash(),
+        "rule", LandMarchRules.VERSION, "supply", rules.supply(unit.provinceId())));
+    if (unit.provinceId() != null) result.put("provinceAddress", WorldQueries.address(saved.node(), "map", "province", unit.provinceId()));
+    return result;
+  }
+  public synchronized Map<String, Object> marches(SavedMap saved) {
+    var result = new LinkedHashMap<String, Object>(Map.of("node", saved.node().label(), "stateHash", saved.stateHash(),
+        "marches", WorldQueries.marches(saved.state(), saved.node())));
+    putClock(result, clock(saved.node()));
+    return result;
+  }
+
+  public synchronized Map<String, Object> battles(SavedMap saved, int offset, int limit) {
+    requirePage(offset, limit);
+    var records = saved.state().formations().battles().values();
+    var entries = records.stream().sorted(Comparator.comparing(Battle::endedAt).reversed().thenComparing(Battle::id))
+        .skip(offset).limit(limit)
+        .map(battle -> WorldQueries.battle(saved.state(), saved.node(), saved.stateHash(), battle)).toList();
+    return Map.of("node", saved.node().label(), "stateHash", saved.stateHash(),
+        "total", records.size(), "offset", Math.min(offset, records.size()), "battles", entries);
+  }
+
+  public synchronized List<?> battleMarkers(SavedMap saved) {
+    if (saved.state().formations().battles().isEmpty()) return List.of();
+    var changes = WorldChangeSet.fromJson(requireNode(saved.node()).changeSetJson());
+    return changes.changes().stream()
+        .filter(WorldChange.ResolveBattle.class::isInstance)
+        .map(change -> ((WorldChange.ResolveBattle) change).battle())
+        .map(battle -> WorldQueries.battleMarker(saved.state(), saved.node(), battle))
+        .filter(Objects::nonNull)
+        .toList();
+  }
+
+  public synchronized Clock clock(SavedMap saved) {
+    return clock(saved.node());
+  }
+
+  public synchronized Map<String, Object> lineage(String branchName) {
+    BranchId branch = branchName == null ? defaultHead().branch() : new BranchId(branchName);
+    NodeRef head = store.head(branch).orElseThrow(() -> new TimelineException("TIMELINE_BRANCH_NOT_FOUND", "分支不存在: " + branch.value()));
+    return Map.of("branch", branch.value(), "head", head.label(),
+        "branches", store.branches().stream().sorted().map(BranchId::value).toList(),
+        "nodes", store.pathToRoot(head).stream().map(this::nodeSummary).toList());
+  }
+
   public synchronized Map<String, Object> exportMilOrg(String text) {
     NodeAddress address = NodeAddress.parse(text);
     var formation = WorldQueries.formation(load(address.node()), address);
@@ -337,8 +407,11 @@ public final class WorldApplicationService {
         : timeline.openFork(ref, new BranchId(requireText(forkBranch, "forkBranch")), expectedHash, prepared);
     String id = UUID.randomUUID().toString();
     drafts.put(id, new Draft(actor, copy));
-    return Map.of("draftId", id, "draftVersion", 0, "base", ref.label(), "baseHash", copy.baseNode().stateHash(),
-        "targetBranch", copy.targetBranch().value(), "mode", copy.kind().name().toLowerCase());
+    var result = new LinkedHashMap<String, Object>(Map.of("draftId", id, "draftVersion", 0, "base", ref.label(),
+        "baseHash", copy.baseNode().stateHash(), "targetBranch", copy.targetBranch().value(),
+        "mode", copy.kind().name().toLowerCase()));
+    putClock(result, clock(ref));
+    return result;
   }
 
   public synchronized Map<String, Object> apply(String actor, String draftId, long expectedVersion,
@@ -348,14 +421,14 @@ public final class WorldApplicationService {
     if (commands == null || commands.isEmpty() || commands.size() > 100) {
       throw new TimelineException("COMMAND_BATCH_INVALID", "commands 数量必须为 1..100");
     }
-    String requestHash = JsonCodec.sha256(JsonCodec.canonicalJson(List.of(draftId, expectedVersion, commands, dryRun)));
+    String commandHash = JsonCodec.sha256(JsonCodec.canonicalInputJson(commands));
+    String requestHash = JsonCodec.sha256(JsonCodec.canonicalJson(List.of(draftId, expectedVersion, commandHash, dryRun)));
     Applied previous = draft.requests.get(requestId);
     if (previous != null) {
       if (!previous.requestHash().equals(requestHash)) throw new TimelineException("REQUEST_ID_CONFLICT", "requestId 已用于其他请求");
       return previous.result();
     }
     requireVersion(draft, expectedVersion);
-    String commandHash = JsonCodec.sha256(JsonCodec.canonicalJson(commands));
     StaticWorldState candidate;
     StaticWorldState before = draft.copy.currentState();
     List<WorldChange> changes;
@@ -366,8 +439,13 @@ public final class WorldApplicationService {
     } else {
       candidate = before;
       changes = new ArrayList<>();
+      var base = draft.copy.baseNode();
+      var context = new WorldCommand.Context(base.ref(), base.stateHash(), () -> {
+        Clock stamp = clock(base.ref());
+        return stamp == null ? null : stamp.time();
+      }, this::geography);
       for (Map<String, Object> command : commands) {
-        WorldChange change = WorldCommand.parse(command).plan(candidate);
+        WorldChange change = WorldCommand.parse(command).plan(candidate, context);
         candidate = new WorldChangeSet(List.of(change)).apply(candidate);
         changes.add(change);
       }
@@ -386,6 +464,14 @@ public final class WorldApplicationService {
         "changes", changes.stream().map(c -> c.getClass().getSimpleName()).toList()));
     Map<String, Object> territories = territoryPreview(before.countries(), candidate.countries(), changes);
     if (!territories.isEmpty()) result.put("territory", territories);
+    if (!Objects.equals(before.simulationTime(), candidate.simulationTime())
+        || !before.formations().marches().equals(candidate.formations().marches())) {
+      putClock(result, committedClock(candidate.simulationTime()));
+      result.put("marches", WorldQueries.marches(candidate, draft.copy.baseNode().ref()));
+    }
+    var battles = changes.stream().filter(WorldChange.ResolveBattle.class::isInstance)
+        .map(change -> ((WorldChange.ResolveBattle) change).battle()).toList();
+    if (!battles.isEmpty()) result.put("battles", battles);
     result = Map.copyOf(result);
     draft.requests.put(requestId, new Applied(requestHash, result));
     return result;
@@ -432,7 +518,9 @@ public final class WorldApplicationService {
       if (!existing.get().requestHash().equals(requestHash)) throw new TimelineException("REQUEST_ID_CONFLICT", "requestId 已用于其他请求");
       Draft pending = drafts.get(draftId);
       if (pending != null && pending.actor.equals(actor)) drafts.remove(draftId);
-      return Map.of("node", existing.get().node().label(), "stateHash", requireNode(existing.get().node()).stateHash(), "replayedReceipt", true);
+      var result = nodeSummary(requireNode(existing.get().node()));
+      result.put("replayedReceipt", true);
+      return result;
     }
     Draft draft = draft(actor, draftId);
     requireVersion(draft, expectedVersion);
@@ -440,7 +528,7 @@ public final class WorldApplicationService {
     CommitReceipt receipt = new CommitReceipt(actor, requestId, requestHash, ref);
     TimelineNode saved = timeline.save(draft.copy, tick, actor, baseHash, receipt);
     StaticWorldState state = draft.copy.currentState();
-    cache.put(saved.ref(), state);
+    if (state.simulationTime() != null) clocks.put(saved.ref(), committedClock(state.simulationTime()));
     drafts.remove(draftId);
     Map<String, Object> result = new LinkedHashMap<>(nodeSummary(saved));
     result.put("replayedReceipt", false);
@@ -480,7 +568,7 @@ public final class WorldApplicationService {
     if (version != draft.version) throw new TimelineException("DRAFT_VERSION_CONFLICT", "工作副本版本不一致: expected=" + version + " actual=" + draft.version);
   }
 
-  private StaticWorldState load(NodeRef ref) { return cache.computeIfAbsent(ref, timeline::load); }
+  private StaticWorldState load(NodeRef ref) { return timeline.loadCached(ref); }
   private TimelineNode requireNode(NodeRef ref) {
     return store.find(ref).orElseThrow(() -> new TimelineException("TIMELINE_NODE_NOT_FOUND", "节点不存在: " + ref));
   }
@@ -500,10 +588,78 @@ public final class WorldApplicationService {
   private static void requirePage(int offset, int limit) {
     if (offset < 0 || limit < 1 || limit > 200) throw new TimelineException("ARGUMENT_INVALID", "offset 必须非负，limit 必须为 1..200");
   }
-  private static Map<String, Object> nodeSummary(TimelineNode node) {
+  private Map<String, Object> nodeSummary(TimelineNode node) {
     Map<String, Object> value = new LinkedHashMap<>();
     value.put("node", node.ref().label()); value.put("parent", node.parent() == null ? null : node.parent().label());
     value.put("stateHash", node.stateHash()); value.put("savedBy", node.savedBy()); value.put("savedAt", node.savedAtEpochMilli());
+    putClock(value, clock(node.ref()));
     return value;
+  }
+
+  private static void putClock(Map<String, Object> result, Clock clock) {
+    if (clock != null) result.put("clock", clock);
+  }
+
+  private static Clock committedClock(String time) {
+    return time == null ? null : new Clock(time, "second", null);
+  }
+
+  private Clock clock(NodeRef ref) {
+    var pending = new ArrayDeque<TimelineNode>();
+    NodeRef cursor = ref;
+    while (cursor != null && !clocks.containsKey(cursor)) {
+      TimelineNode node = requireNode(cursor);
+      pending.push(node);
+      cursor = node.parent();
+    }
+    Clock current = clocks.get(cursor);
+    while (!pending.isEmpty()) {
+      TimelineNode node = pending.pop();
+      String time = node.parent() == null ? load(node.ref()).simulationTime() : explicitTime(node);
+      if (time != null) current = committedClock(time);
+      else if (current == null || current.precision().equals("date")) {
+        Clock reference = calendar().get(node.ref());
+        if (reference != null) current = reference;
+      }
+      clocks.put(node.ref(), current);
+    }
+    return current;
+  }
+
+  private static String explicitTime(TimelineNode node) {
+    var changes = WorldChangeSet.fromJson(node.changeSetJson()).changes();
+    for (var change : changes.reversed()) {
+      if (change instanceof WorldChange.SetSimulationTime clock) return clock.time();
+      if (change instanceof WorldChange.StartMarch march) return march.march().startedAt();
+      if (change instanceof WorldChange.ResolveBattle battle) return battle.battle().endedAt();
+    }
+    return null;
+  }
+
+  private Map<NodeRef, Clock> calendar() {
+    if (calendar != null) return calendar;
+    var path = store.world().resolve("scenario-calendar.json");
+    if (Files.isRegularFile(path)) {
+      try {
+        var document = JsonCodec.fromJson(Files.readString(path), ScenarioCalendar.class);
+        if (document.formatVersion() != 1) throw new IllegalArgumentException("未知剧本日期参考版本");
+        var entries = new HashMap<NodeRef, Clock>();
+        for (var anchor : document.anchors()) {
+          NodeRef ref = node(anchor.node());
+          if (!requireNode(ref).stateHash().equals(anchor.stateHash())) {
+            throw new IllegalArgumentException("日期参考与节点 hash 不一致: " + ref.label());
+          }
+          String time = SimulationTime.normalize(LocalDate.parse(anchor.date()) + "T00:00:00");
+          var value = new Clock(time, "date", requireText(anchor.source(), "source"));
+          if (entries.putIfAbsent(ref, value) != null) throw new IllegalArgumentException("日期参考节点重复: " + ref.label());
+        }
+        calendar = Map.copyOf(entries);
+        return calendar;
+      } catch (IOException | RuntimeException e) {
+        System.err.println("无法读取剧本日期参考: " + e.getMessage());
+      }
+    }
+    calendar = Map.of();
+    return calendar;
   }
 }

@@ -48,11 +48,26 @@ public final class WorldTools {
             optionalString(a, "countryId"), optionalString(a, "stateId"), optionalInt(a, "offset", 0), optionalInt(a, "limit", 25))));
     tools.register(tool(app, "orbat_export", "从编制文档或节点地址导出 DSH mil-org v1，并报告损失", false,
         props("address", string()), List.of("address"), (a, c) -> app.exportMilOrg(requiredString(a, "address"))));
+    tools.register(tool(app, "world_movement_estimate", "按编制最低速度和陆上省链估算行军耗时，省略路线时只查速度", false,
+        props("address", string(), "role", Map.of("type", "string", "enum", List.of("actual", "ideal")),
+            "route", Map.of("type", "array", "items", string(), "minItems", 2,
+                "description", "同一节点下的陆地省份地址序列，第一项是单位的部署省")),
+        List.of("address"), (a, c) -> app.movementEstimate(requiredString(a, "address"),
+            optionalString(a, "role"), route(a))));
+    tools.register(tool(app, "world_marches", "读取保存节点的行军路线、位置、进度和剧本时间", false,
+        props("node", string()), List.of(), (a, c) -> app.marches(app.savedMap(optionalString(a, "node")))));
+    tools.register(tool(app, "world_supply_status", "按单位地址读取首都、铁路及补给中心的可达状态", false,
+        props("address", string()), List.of("address"), (a, c) -> app.supplyStatus(requiredString(a, "address"))));
+    tools.register(tool(app, "world_battles", "分页读取保存节点的战斗、损耗、控制变化和证据", false,
+        props("node", string(), "offset", integer(), "limit", integer()), List.of(),
+        (a, c) -> app.battles(app.savedMap(optionalString(a, "node")), optionalInt(a, "offset", 0), optionalInt(a, "limit", 25))));
     tools.register(tool(app, "world_validate", "校验节点并列出遗留拓扑差异", false,
         props("node", string()), List.of("node"), (a, c) -> app.validate(requiredString(a, "node"))));
     tools.register(tool(app, "timeline_tree", "分页列出分支与节点", false,
         props("offset", integer(), "limit", integer()), List.of(),
         (a, c) -> app.tree(optionalInt(a, "offset", 0), optionalInt(a, "limit", 100))));
+    tools.register(tool(app, "timeline_lineage", "按父链读分支的线性时间线和剧本时间", false,
+        props("branch", string()), List.of(), (a, c) -> app.lineage(optionalString(a, "branch"))));
     tools.register(tool(app, "timeline_diff", "查看从祖先节点到后代节点的增量摘要", false,
         props("from", string(), "to", string(), "offset", integer(), "limit", integer()), List.of("from", "to"),
         (a, c) -> app.diff(requiredString(a, "from"), requiredString(a, "to"), optionalInt(a, "offset", 0), optionalInt(a, "limit", 100))));
@@ -61,7 +76,7 @@ public final class WorldTools {
     tools.register(tool(app, "edit_open", "从已保存节点打开推进或 fork 工作副本", true,
         props("base", string(), "expectedHash", string(), "forkBranch", string()), List.of("base", "expectedHash"),
         (a, c) -> app.open(actor(c), requiredString(a, "base"), requiredString(a, "expectedHash"), optionalString(a, "forkBranch"))));
-    tools.register(tool(app, "edit_apply", "原子批量预览或修改地图、国家、编制和部署", true,
+    tools.register(tool(app, "edit_apply", "原子批量预览或修改地图、国家、编制、部署、剧本时钟及行军", true,
         props("draftId", string(), "expectedVersion", integer(), "requestId", string(), "commands",
             Map.of("type", "array", "minItems", 1, "maxItems", 100, "items", commandSchema()), "dryRun", bool()),
         List.of("draftId", "expectedVersion", "requestId", "commands"),
@@ -84,7 +99,7 @@ public final class WorldTools {
 
   private static AgentTool tool(WorldApplicationService app, String name, String description, boolean write,
       Map<String, Object> properties, List<String> required,
-      BiFunction<Map<String, Object>, ToolContext, Map<String, Object>> call) {
+      BiFunction<Map<String, Object>, ToolContext, ?> call) {
     return new AgentTool() {
       @Override public String name() { return name; }
       @Override public String description() { return description; }
@@ -160,14 +175,15 @@ public final class WorldTools {
         "evidence", evidence, "deploymentEvidence", evidence), "id", "name", "evidence");
     Map<String, Object> document = object(props("format", string(), "documentId", string(), "role", string(),
         "date", nullableString, "root", Map.of("type", "object", "required", List.of("nodeId", "name"),
-            "description", "orbat-native-v1 递归节点，字段含 nodeId、name、type、echelon、personnel、equipment、children、extensions")),
+            "description", "orbat-native-v1 递归节点，字段含 nodeId、name、type、echelon、personnel、equipment、children、extensions、marchSpeed（kmPerHour 与 evidence）")),
         "format", "documentId", "role", "root");
     return Map.of("type", "object", "required", List.of("op"), "additionalProperties", true,
-        "description", "地图操作用相应实体或 ID。setTerritory 用 provinceIds、field 和 assignment；deployUnit 用 unitId、provinceId 和 evidence。可组合多个命令维护引用一致性。",
+        "description", "地图操作用相应实体或 ID。setSimulationTime 用 time，advanceTime 用正整数 minutes，startMarch 用单位 address 和包含起点的省份 route，cancelMarch 用单位 address。地址须属于草稿基点。",
         "properties", props("op", Map.of("type", "string", "enum", List.of("patchProvince", "rebuildAdjacencies", "putProvince", "removeProvince",
                 "putState", "removeState", "putStrategicRegion", "removeStrategicRegion", "putSupplyHub", "removeSupplyHub",
                 "putRailway", "removeRailway", "putEntityLink", "removeEntityLink", "replaceAdjacencies",
-                "putCountry", "setTerritory", "putOrbatDocument", "importMilOrg", "putUnit", "deployUnit")),
+                "putCountry", "setTerritory", "putOrbatDocument", "importMilOrg", "putUnit", "deployUnit",
+                "setSimulationTime", "advanceTime", "startMarch", "cancelMarch", "resolveBattle", "setTransitRight")),
             "id", string(), "name", string(), "kind", string(), "terrain", string(), "shape", shape,
             "displayPoint", point, "stateId", nullableString, "regionId", nullableString, "tags", array(string()),
             "province", province, "provinceId", nullableString, "state", region, "region", region,
@@ -176,7 +192,13 @@ public final class WorldTools {
             "country", country, "provinceIds", array(string()), "field", string(),
             "assignment", Map.of("anyOf", List.of(assignment, Map.of("type", "null"))),
             "document", document, "documentId", string(), "role", string(), "source", string(),
-            "milOrg", Map.of("type", "object"), "unit", unit, "unitId", string(), "evidence", evidence));
+            "milOrg", Map.of("type", "object"), "unit", unit, "unitId", string(),
+            "evidence", Map.of("anyOf", List.of(evidence, Map.of("type", "null"))),
+            "grantorAddress", string(), "guestAddress", string(),
+            "time", string(), "minutes", Map.of("type", "integer", "minimum", 1), "address", string(), "route", array(string()),
+            "battle", Map.of("type", "object",
+                "required", List.of("id", "provinceAddress", "attackers", "defenders", "outcome", "rationale", "evidence"),
+                "description", "单场裁决。可另给 startedAt、controllerAddress 和 losses。每项损耗含 unitAddress、实际 formationAddress、personnel 或 equipment（itemId 或 name，及 count）")));
   }
 
   private static Map<String, Object> array(Map<String, Object> item) { return Map.of("type", "array", "items", item); }
@@ -218,6 +240,17 @@ public final class WorldTools {
     if (value > Integer.MAX_VALUE) throw new IllegalArgumentException(key + " 超出范围");
     return (int) value;
   }
+  private static List<String> route(Map<String, Object> args) {
+    if (!args.containsKey("route")) return null;
+    if (!(args.get("route") instanceof List<?> list)) throw new IllegalArgumentException("route 须为省份地址数组");
+    List<String> addresses = new ArrayList<>(list.size());
+    for (Object item : list) {
+      if (!(item instanceof String text)) throw new IllegalArgumentException("route 各项须为省份地址");
+      addresses.add(text);
+    }
+    return addresses;
+  }
+
   private static List<Map<String, Object>> commands(Map<String, Object> args) {
     Object value = args.get("commands");
     if (!(value instanceof List<?> list) || list.isEmpty() || list.size() > 100) throw new IllegalArgumentException("commands 必须有 1..100 项");

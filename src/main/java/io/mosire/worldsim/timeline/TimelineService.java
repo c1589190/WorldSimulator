@@ -4,16 +4,20 @@ import io.mosire.worldsim.address.BranchId;
 import io.mosire.worldsim.address.NodeRef;
 import io.mosire.worldsim.map.ValidationIssue;
 import io.mosire.worldsim.map.PolygonTopology;
+import io.mosire.worldsim.map.WorldMap;
 import io.mosire.worldsim.map.WorldMapValidator;
 import io.mosire.worldsim.state.StaticWorldState;
 import io.mosire.worldsim.state.WorldChange;
 import io.mosire.worldsim.state.WorldChangeSet;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.function.Function;
 
 /**
  * Headless 时间线服务：唯一写路径为 working copy → ChangeSet → saved node。
@@ -32,6 +36,61 @@ public final class TimelineService {
 
   private final TimelineStore store;
   private final int checkpointEvery;
+  private final ReplayCache cachedReplay = new ReplayCache();
+
+  private static final class ReplayCache {
+    private record Entry(StaticWorldState state, boolean validated) {}
+
+    private static final class MapEntry {
+      final WorldMap map;
+      final Function<StaticWorldState, String> hash;
+      boolean validated;
+
+      MapEntry(StaticWorldState state) {
+        this.map = state.map();
+        this.hash = state.contentHasher();
+      }
+    }
+
+    private final LinkedHashMap<NodeRef, Entry> states = new LinkedHashMap<>(16, .75f, true) {
+      @Override protected boolean removeEldestEntry(Map.Entry<NodeRef, Entry> entry) { return size() > 12; }
+    };
+    private final List<MapEntry> maps = new ArrayList<>(2);
+
+    private MapEntry mapFor(StaticWorldState state) {
+      for (int index = 0; index < maps.size(); index++) {
+        if (maps.get(index).map == state.map()) {
+          var found = maps.remove(index);
+          maps.addLast(found);
+          return found;
+        }
+      }
+      var created = new MapEntry(state);
+      maps.addLast(created);
+      if (maps.size() > 2) {
+        var evicted = maps.removeFirst();
+        states.values().removeIf(entry -> entry.state().map() == evicted.map);
+      }
+      return created;
+    }
+
+    String contentHash(StaticWorldState state) {
+      return mapFor(state).hash.apply(state);
+    }
+
+    StaticWorldState checked(NodeRef ref, Entry entry) {
+      if (!entry.validated()) {
+        var map = mapFor(entry.state());
+        if (!map.validated) {
+          requireValidMap(map.map);
+          map.validated = true;
+        }
+        requireValidDomains(entry.state());
+        states.put(ref, new Entry(entry.state(), true));
+      }
+      return entry.state();
+    }
+  }
 
   public TimelineService(TimelineStore store) {
     this(store, DEFAULT_CHECKPOINT_EVERY);
@@ -78,37 +137,52 @@ public final class TimelineService {
 
   /** 读取任意已保存节点的完整状态：最近 checkpoint + 增量回放，并逐节点校验 hash。 */
   public StaticWorldState load(NodeRef ref) {
+    return load(ref, null);
+  }
+
+  /** Interactive reads can reuse previously read and hash-checked states on the requested parent chain. */
+  public synchronized StaticWorldState loadCached(NodeRef ref) {
+    return load(ref, cachedReplay);
+  }
+
+  private StaticWorldState load(NodeRef ref, ReplayCache cache) {
     TimelineNode target = requireSavedNode(ref);
+    if (cache != null) {
+      var hit = cache.states.get(ref);
+      if (hit != null) return cache.checked(ref, hit);
+    }
     List<TimelineNode> path = store.pathToRoot(target.ref());
     if (path.isEmpty()) {
       throw new TimelineException("TIMELINE_STORE_CORRUPT",
           "已找到节点但无法构造根路径: " + target.ref());
     }
 
-    int checkpointIndex = -1;
+    Function<StaticWorldState, String> cachedHash = cache == null ? null : cache::contentHash;
+    Function<StaticWorldState, String> hash = cachedHash == null ? StaticWorldState::contentHash : cachedHash;
+    int start = -1;
     StaticWorldState state = null;
     for (int index = path.size() - 1; index >= 0; index--) {
       TimelineNode candidate = path.get(index);
-      Optional<String> checkpointJson = store.checkpoint(candidate.ref());
-      if (checkpointJson.isEmpty()) {
-        continue;
+      var ancestor = cache == null ? null : cache.states.get(candidate.ref());
+      if (ancestor != null) {
+        state = ancestor.state();
+        start = index;
+        break;
       }
-      try {
-        state = StaticWorldState.fromJson(checkpointJson.get());
-      } catch (RuntimeException e) {
-        throw new TimelineException("TIMELINE_CHECKPOINT_INVALID",
-            "checkpoint JSON 无法解析: " + candidate.ref(), e);
-      }
-      requireHash(candidate, state, "checkpoint");
-      checkpointIndex = index;
+      var checkpoint = store.checkpointState(candidate.ref(), cachedHash);
+      if (checkpoint.isEmpty()) continue;
+      state = checkpoint.get();
+      requireHash(candidate, hash.apply(state), "checkpoint");
+      if (cache != null) cache.states.put(candidate.ref(), new ReplayCache.Entry(state, false));
+      start = index;
       break;
     }
-    if (checkpointIndex < 0) {
+    if (start < 0) {
       throw new TimelineException("TIMELINE_CHECKPOINT_MISSING",
           "节点路径上没有 checkpoint，无法重建状态: " + target.ref());
     }
 
-    for (int index = checkpointIndex + 1; index < path.size(); index++) {
+    for (int index = start + 1; index < path.size(); index++) {
       TimelineNode node = path.get(index);
       WorldChangeSet changeSet;
       try {
@@ -123,8 +197,10 @@ public final class TimelineService {
         throw new TimelineException("TIMELINE_CHANGESET_APPLY_FAILED",
             "回放节点 ChangeSet 失败: " + node.ref(), e);
       }
-      requireHash(node, state, "replay");
+      requireHash(node, hash.apply(state), "replay");
+      if (cache != null) cache.states.put(node.ref(), new ReplayCache.Entry(state, false));
     }
+    if (cache != null) return cache.checked(ref, cache.states.get(ref));
     requireValidState(state);
     return state;
   }
@@ -157,15 +233,9 @@ public final class TimelineService {
           }
           requireHash(node, replayed, "full-replay");
           requireValidState(replayed);
-          Optional<String> checkpoint = store.checkpoint(node.ref());
+          var checkpoint = store.checkpointState(node.ref(), null);
           if (checkpoint.isPresent()) {
-            StaticWorldState snap;
-            try {
-              snap = StaticWorldState.fromJson(checkpoint.get());
-            } catch (RuntimeException e) {
-              throw new TimelineException("TIMELINE_CHECKPOINT_INVALID", "checkpoint JSON 无法解析: " + node.ref(), e);
-            }
-            requireHash(node, snap, "checkpoint");
+            requireHash(node, checkpoint.get(), "checkpoint");
           }
           previousState = replayed;
         }
@@ -329,7 +399,14 @@ public final class TimelineService {
         savedBy);
     store.saveNode(node, checkpoint ? stateJson : null, receipt);
     workingCopy.markSaved(target);
+    rememberSavedState(node, state);
     return node;
+  }
+
+  private synchronized void rememberSavedState(TimelineNode node, StaticWorldState state) {
+    if (cachedReplay.states.isEmpty()) return;
+    cachedReplay.mapFor(state).validated = true;
+    cachedReplay.states.put(node.ref(), new ReplayCache.Entry(state, true));
   }
 
   /** 在当前节点生成/刷新派生 checkpoint；不是新时间线节点。 */
@@ -360,16 +437,24 @@ public final class TimelineService {
   }
 
   private static void requireValidState(StaticWorldState state) {
-    List<ValidationIssue> issues = WorldMapValidator.validate(state.map());
+    requireValidMap(state.map());
+    requireValidDomains(state);
+  }
+
+  private static void requireValidMap(WorldMap map) {
+    List<ValidationIssue> issues = WorldMapValidator.validate(map);
     if (!issues.isEmpty()) {
       ValidationIssue first = issues.get(0);
       throw new TimelineException("TIMELINE_STATE_INVALID",
           "静态状态校验失败: " + issues.size() + " 个问题；首个: "
               + first.code() + " " + first.message());
     }
+  }
+
+  private static void requireValidDomains(StaticWorldState state) {
     try {
       state.countries().validate(state.map());
-      state.formations().validate(state.map(), state.countries());
+      state.formations().validate(state.map(), state.countries(), state.simulationTime());
     } catch (IllegalArgumentException e) {
       throw new TimelineException("TIMELINE_STATE_INVALID", e.getMessage(), e);
     }
@@ -415,7 +500,10 @@ public final class TimelineService {
   }
 
   private static void requireHash(TimelineNode node, StaticWorldState state, String stage) {
-    String actual = state.contentHash();
+    requireHash(node, state.contentHash(), stage);
+  }
+
+  private static void requireHash(TimelineNode node, String actual, String stage) {
     if (!actual.equals(node.stateHash())) {
       throw new TimelineException("TIMELINE_REPLAY_HASH_MISMATCH",
           "内容 hash 不一致 stage=" + stage + " node=" + node.ref()

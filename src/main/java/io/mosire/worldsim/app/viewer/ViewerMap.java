@@ -1,5 +1,6 @@
 package io.mosire.worldsim.app.viewer;
 
+import io.mosire.worldsim.app.RiverReference;
 import io.mosire.worldsim.country.CountryState;
 import io.mosire.worldsim.map.JtsGeometry;
 import io.mosire.worldsim.map.PolygonPart;
@@ -49,6 +50,7 @@ final class ViewerMap {
   private static final Color MISSING_OWNER = new Color(0xff66ba);
   private static final Color LAND_BORDER = new Color(43, 52, 53, 95);
   private static final Color WATER_BORDER = new Color(128, 161, 177, 63);
+  private static final Color RIVER = new Color(0x3376ab);
   private static final List<Color> AREA_COLORS = List.of(
       new Color(0x8da993), new Color(0xd7bc8d), new Color(0xaaa2c7), new Color(0x83a6be),
       new Color(0xd59684), new Color(0xaab371), new Color(0xc98eaa), new Color(0x8cbab3),
@@ -82,25 +84,33 @@ final class ViewerMap {
   record Area(ProvinceShape shape, Vec2 point) {}
 
   private record Drawing(Province province, Path2D path) {}
-  private record AreaDrawing(String id, Area area, Path2D path, Color color) {}
-  private record AreaLayer(Map<String, AreaDrawing> byId, STRtree index) {}
+  private record AreaDrawing(String id, Path2D path, Color color) {}
+  private record RiverDrawing(int width, Path2D path) {}
   private record ImageKey(Layer layer, int level, int x, int y, CountryState politics, Set<String> gaps) {}
 
   private final WorldMap map;
   private final STRtree index = new STRtree();
-  private final Map<Layer, AreaLayer> areaLayers = new EnumMap<>(Layer.class);
+  private final STRtree rivers = new STRtree();
+  private final Map<Layer, Map<String, Area>> areas = new EnumMap<>(Layer.class);
+  private final Map<Layer, STRtree> areaLayers = new EnumMap<>(Layer.class);
   private final LinkedHashMap<ImageKey, byte[]> images = new LinkedHashMap<>(16, .75f, true);
   private long imageBytes;
 
-  ViewerMap(WorldMap map) {
+  ViewerMap(WorldMap map, RiverReference reference) {
     this.map = map;
     for (Province province : map.provinces().values()) {
       Path2D path = path(province.shape());
-      var bounds = path.getBounds2D();
-      index.insert(new Envelope(bounds.getMinX(), bounds.getMaxX(), bounds.getMinY(), bounds.getMaxY()),
-          new Drawing(province, path));
+      index.insert(envelope(path), new Drawing(province, path));
     }
     index.build();
+    if (reference != null) {
+      for (var line : reference.lines()) {
+        Path2D path = new Path2D.Double();
+        append(path, line.points());
+        rivers.insert(envelope(path), new RiverDrawing(line.width(), path));
+      }
+    }
+    rivers.build();
   }
 
   static double overviewScale(WorldMap map) {
@@ -123,8 +133,23 @@ final class ViewerMap {
   }
 
   synchronized Area area(Layer layer, String id) {
-    var drawing = areaLayer(layer).byId().get(id);
-    return drawing == null ? null : drawing.area();
+    var byId = areas.computeIfAbsent(layer, ignored -> new HashMap<>());
+    return byId.computeIfAbsent(id, key -> mergeArea(layer == Layer.STATE
+        ? map.states().get(key).provinceIds()
+        : map.strategicRegions().get(key).provinceIds()));
+  }
+
+  private Area mergeArea(List<String> ids) {
+    if (ids.isEmpty()) return null;
+    if (ids.size() == 1) {
+      var province = map.provinces().get(ids.getFirst());
+      var point = JtsGeometry.toGeometry(province.shape()).getInteriorPoint().getCoordinate();
+      return new Area(province.shape(), new Vec2(point.x, point.y));
+    }
+    var shapes = ids.stream().map(id -> JtsGeometry.toGeometry(map.provinces().get(id).shape())).toList();
+    Geometry merged = OverlayNGRobust.union(shapes);
+    var point = merged.getInteriorPoint().getCoordinate();
+    return new Area(shape(merged), new Vec2(point.x, point.y));
   }
 
   synchronized byte[] image(Layer layer, int level, int x, int y, CountryState politics, Set<String> gaps) throws IOException {
@@ -185,6 +210,13 @@ final class ViewerMap {
         graphics.setColor(LAND_BORDER);
         areas.forEach(area -> graphics.draw(area.path()));
       }
+      graphics.setColor(RIVER);
+      for (Object candidate : rivers.query(viewport)) {
+        var river = (RiverDrawing) candidate;
+        double widthInPixels = .9 + .11 * (river.width() - 3);
+        graphics.setStroke(new BasicStroke((float) (widthInPixels / scale), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        graphics.draw(river.path());
+      }
     } finally {
       graphics.dispose();
     }
@@ -204,16 +236,12 @@ final class ViewerMap {
 
   @SuppressWarnings("unchecked")
   private List<AreaDrawing> areaDrawings(Layer layer, Envelope viewport) {
-    List<AreaDrawing> candidates = areaLayer(layer).index().query(viewport);
+    List<AreaDrawing> candidates = areaLayers.computeIfAbsent(layer, this::buildAreas).query(viewport);
     candidates.sort(Comparator.comparing(AreaDrawing::id));
     return candidates;
   }
 
-  private AreaLayer areaLayer(Layer layer) {
-    return areaLayers.computeIfAbsent(layer, this::buildAreas);
-  }
-
-  private AreaLayer buildAreas(Layer layer) {
+  private STRtree buildAreas(Layer layer) {
     var groups = new LinkedHashMap<String, List<String>>();
     if (layer == Layer.STATE) map.states().forEach((id, state) -> groups.put(id, state.provinceIds()));
     else map.strategicRegions().forEach((id, region) -> groups.put(id, region.provinceIds()));
@@ -229,16 +257,11 @@ final class ViewerMap {
     }
 
     var slots = new HashMap<String, Integer>();
-    var byId = new HashMap<String, AreaDrawing>();
-    var areas = new STRtree();
+    var areaIndex = new STRtree();
     for (var group : groups.entrySet()) {
       if (group.getValue().isEmpty()) continue;
       String id = group.getKey();
-      var members = group.getValue().stream().map(map.provinces()::get).toList();
-      Geometry merged = OverlayNGRobust.union(members.stream().map(province -> JtsGeometry.toGeometry(province.shape())).toList());
-      var center = merged.getInteriorPoint().getCoordinate();
-      var shape = shape(merged);
-      var area = new Area(shape, new Vec2(center.x, center.y));
+      Path2D path = path(area(layer, id).shape());
 
       var used = new HashSet<Integer>();
       for (String neighbor : neighbors.getOrDefault(id, Set.of())) used.add(slots.get(neighbor));
@@ -249,14 +272,13 @@ final class ViewerMap {
       }
       slots.put(id, slot);
       Color color = AREA_COLORS.get(slot % size);
-      int shades = slot / size + (members.stream().allMatch(province -> province.kind().equals("sea")) ? 1 : 0);
+      boolean sea = group.getValue().stream().allMatch(member -> map.provinces().get(member).kind().equals("sea"));
+      int shades = slot / size + (sea ? 1 : 0);
       for (int i = 0; i < shades; i++) color = color.darker();
-      var drawing = new AreaDrawing(id, area, path(shape), color);
-      byId.put(id, drawing);
-      areas.insert(merged.getEnvelopeInternal(), drawing);
+      areaIndex.insert(envelope(path), new AreaDrawing(id, path, color));
     }
-    areas.build();
-    return new AreaLayer(Map.copyOf(byId), areas);
+    areaIndex.build();
+    return areaIndex;
   }
 
   private static ProvinceShape shape(Geometry geometry) {
@@ -278,23 +300,31 @@ final class ViewerMap {
     return Math.max(1, (int) Math.ceil(extent * scale));
   }
 
+  private static Envelope envelope(Path2D path) {
+    var bounds = path.getBounds2D();
+    return new Envelope(bounds.getMinX(), bounds.getMaxX(), bounds.getMinY(), bounds.getMaxY());
+  }
+
   private static Path2D path(ProvinceShape shape) {
     Path2D path = new Path2D.Double(Path2D.WIND_EVEN_ODD);
     for (var part : shape.parts()) {
-      append(path, part.outer());
-      part.holes().forEach(hole -> append(path, hole));
+      append(path, part.outer().points());
+      path.closePath();
+      for (var hole : part.holes()) {
+        append(path, hole.points());
+        path.closePath();
+      }
     }
     return path;
   }
 
-  private static void append(Path2D path, Ring ring) {
-    Vec2 first = ring.points().getFirst();
+  private static void append(Path2D path, List<Vec2> points) {
+    Vec2 first = points.getFirst();
     path.moveTo(first.x(), first.y());
-    for (int i = 1; i < ring.points().size(); i++) {
-      Vec2 point = ring.points().get(i);
+    for (int i = 1; i < points.size(); i++) {
+      Vec2 point = points.get(i);
       path.lineTo(point.x(), point.y());
     }
-    path.closePath();
   }
 
   private static Color fill(ImageKey key, Province province) {

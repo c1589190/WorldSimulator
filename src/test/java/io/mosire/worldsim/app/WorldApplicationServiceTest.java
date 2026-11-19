@@ -45,7 +45,7 @@ class WorldApplicationServiceTest {
           List.of(100.0, 180 / Math.PI, 0.0, 50.0, 0.0, -80.0), 2,
           new WorldGeography.Check(3, 1, 1, 1),
           List.of(new WorldGeography.Place("west", List.of("West", "Wéststadt"), -40, 0, "fixture")), List.of(),
-          new WorldGeography.TerritoryReference("1936-01-01", "fixture", Map.of("west", "WEST")));
+          new WorldGeography.TerritoryReference("1936-01-01", "fixture", Map.of("west", "WEST")), null);
       var path = world.resolve("geo-reference.json");
       ObjectNode encoded = JsonCodec.mapper().valueToTree(reference);
       Files.writeString(path, JsonCodec.canonicalJson(reference));

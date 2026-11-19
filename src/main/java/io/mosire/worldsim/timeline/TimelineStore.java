@@ -2,10 +2,12 @@ package io.mosire.worldsim.timeline;
 
 import io.mosire.worldsim.address.BranchId;
 import io.mosire.worldsim.address.NodeRef;
+import io.mosire.worldsim.state.StaticWorldState;
 
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 
 /**
  * 时间线持久化端口。实现可以是 SQLite，后续也可以是内存/测试替身。
@@ -56,6 +58,17 @@ public interface TimelineStore extends AutoCloseable {
   void saveCheckpoint(NodeRef ref, String checkpointStateJson);
 
   Optional<String> checkpoint(NodeRef ref);
+
+  /** Read a typed checkpoint. A supplied hash function permits reuse of verified map data for interactive replay. */
+  default Optional<StaticWorldState> checkpointState(NodeRef ref, Function<StaticWorldState, String> cachedHash) {
+    return checkpoint(ref).map(json -> {
+      try {
+        return StaticWorldState.fromJson(json);
+      } catch (RuntimeException e) {
+        throw new TimelineException("TIMELINE_CHECKPOINT_INVALID", "checkpoint JSON 无法解析: " + ref, e);
+      }
+    });
+  }
 
   /** Re-read persisted metadata where applicable before a full verification. */
   default void verifyStorageIntegrity() {}

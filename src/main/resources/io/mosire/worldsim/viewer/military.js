@@ -4,6 +4,7 @@ export const STACK_ZOOM = 3.5;
 const counterWidth = 50;
 const counterHeight = 32;
 const counterGap = 8;
+const battleAccent = '#efad85';
 const number = new Intl.NumberFormat('zh-CN');
 const centered = [[0, 0]];
 const offsets = [...centered];
@@ -36,8 +37,20 @@ function normalized(value) {
 }
 
 function identityLine(unit) {
+  if (unit.kind === 'battle') return '战斗记录';
   return [echelons.get(normalized(unit.echelon))?.[0] || unit.echelon,
     types.get(normalized(unit.type))?.[0] || unit.type].filter(Boolean).join(' · ');
+}
+
+function countBattles(markers) {
+  return markers.filter(marker => marker.kind === 'battle').length;
+}
+
+export function counterSummary(markers) {
+  const battles = countBattles(markers);
+  const units = markers.length - battles;
+  return [units && number.format(units) + ' 个部署单位',
+    battles && number.format(battles) + ' 场战斗'].filter(Boolean).join(' · ');
 }
 
 function clamp(value, min, max) {
@@ -54,7 +67,9 @@ export function layoutUnitCounters(units, { left, top, width, height, scale, zoo
   const stepX = cardWidth + counterGap;
   const stepY = cardHeight + counterGap;
   const bottom = height > 160 ? 58 : 4;
-  const spread = zoom >= STACK_ZOOM ? offsets : centered;
+  const expanded = zoom >= STACK_ZOOM;
+  const spread = expanded ? offsets : centered;
+  const markers = expanded ? units.toSorted((a, b) => Number(b.kind === 'battle') - Number(a.kind === 'battle')) : units;
   const occupied = new Map();
   const stackedProvinces = new Map();
 
@@ -75,7 +90,7 @@ export function layoutUnitCounters(units, { left, top, width, height, scale, zoo
     return closest;
   }
 
-  for (const unit of units) {
+  for (const unit of markers) {
     const anchorX = left + unit.point.x * scale;
     const anchorY = top + unit.point.y * scale;
     if (anchorX < 0 || anchorX > width || anchorY < 0 || anchorY > height) continue;
@@ -85,6 +100,7 @@ export function layoutUnitCounters(units, { left, top, width, height, scale, zoo
       continue;
     }
     let covered;
+    let unitStack;
     for (const [dx, dy] of spread) {
       const x = clamp(anchorX + dx * (stepX + 1), halfWidth + 4, width - halfWidth - 4);
       const y = clamp(anchorY + dy * (stepY + 1), halfHeight + 4, height - halfHeight - bottom);
@@ -93,6 +109,7 @@ export function layoutUnitCounters(units, { left, top, width, height, scale, zoo
       const overlap = nearby(x, y, column, row);
       if (overlap) {
         covered ??= overlap;
+        if (expanded && unit.kind !== 'battle' && overlap.units[0].kind !== 'battle') unitStack ??= overlap;
         continue;
       }
       const hit = { x, y, anchorX, anchorY, width: cardWidth, height: cardHeight, units: [unit] };
@@ -102,8 +119,9 @@ export function layoutUnitCounters(units, { left, top, width, height, scale, zoo
       break;
     }
     if (covered) {
-      covered.units.push(unit);
-      if (unit.provinceAddress) stackedProvinces.set(unit.provinceAddress, covered);
+      const stack = unitStack || covered;
+      stack.units.push(unit);
+      if (unit.provinceAddress) stackedProvinces.set(unit.provinceAddress, stack);
     }
   }
   return hits;
@@ -167,6 +185,26 @@ function symbol(ctx, x, y, size, type, ink) {
   ctx.restore();
 }
 
+function battleSymbol(ctx, x, y, size) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(size / 16, size / 16);
+  ctx.strokeStyle = battleAccent;
+  ctx.lineCap = 'round';
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.moveTo(-5.5, -5.5);
+  ctx.lineTo(6.5, 6.5);
+  ctx.moveTo(5.5, -5.5);
+  ctx.lineTo(-6.5, 6.5);
+  ctx.moveTo(2, 6);
+  ctx.lineTo(6, 2);
+  ctx.moveTo(-2, 6);
+  ctx.lineTo(-6, 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
 export function drawUnitCounters(ctx, hits, selected) {
   ctx.save();
   for (const hit of hits) {
@@ -189,9 +227,11 @@ export function drawUnitCounters(ctx, hits, selected) {
     const { x, y, units, width, height } = hit;
     const front = units[0];
     const stack = units.length > 1;
+    const battles = countBattles(units);
+    const deployed = units.length - battles;
     const active = selected.size > 0 && units.some(unit => selected.has(unit.address));
     const sharedCountry = units.every(unit => unit.countryId === front.countryId);
-    const accent = nationColor(sharedCountry ? front.countryColor : null);
+    const accent = battles ? battleAccent : nationColor(sharedCountry ? front.countryColor : null);
     const cardX = x - width / 2;
     const cardY = y - height / 2;
     const ink = active ? '#ffe5a9' : '#edf2df';
@@ -201,18 +241,34 @@ export function drawUnitCounters(ctx, hits, selected) {
       ctx.fillStyle = accent;
       ctx.fillRect(cardX + 6, cardY - 3, width - 10, 3);
     }
-    ctx.fillStyle = active ? '#3d4634' : '#233933';
+    ctx.fillStyle = battles ? (active ? '#5e3931' : '#472e2a') : (active ? '#3d4634' : '#233933');
     ctx.fillRect(cardX, cardY, width, height);
     ctx.fillStyle = accent;
     ctx.fillRect(cardX + 1, cardY + 1, 4, height - 2);
-    ctx.strokeStyle = active ? '#ffd082' : '#bcc9b6';
+    ctx.strokeStyle = active ? '#ffd082' : battles ? '#d6a18b' : '#bcc9b6';
     ctx.lineWidth = active ? 2 : 1;
     ctx.strokeRect(cardX + .5, cardY + .5, width - 1, height - 1);
 
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'center';
     ctx.fillStyle = ink;
-    if (stack) {
+    if (battles) {
+      const glyphX = cardX + width * .32;
+      const labelX = cardX + width * .72;
+      const labelWidth = width * .47;
+      if (deployed) {
+        ctx.strokeStyle = ink;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(glyphX - 5.5, y - 11, 10, 6);
+        ctx.strokeRect(glyphX - 3.5, y - 9, 10, 6);
+        ctx.font = '700 12px system-ui';
+        ctx.fillText(number.format(deployed), labelX, y - 6, labelWidth);
+      }
+      battleSymbol(ctx, glyphX, y + (deployed ? 7 : 0), deployed ? 12 : 16);
+      ctx.fillStyle = battleAccent;
+      ctx.font = '700 12px system-ui';
+      ctx.fillText(stack ? number.format(battles) : '战斗', labelX, y + (deployed ? 7 : 0), labelWidth);
+    } else if (stack) {
       const stackX = cardX + width * .31;
       ctx.strokeStyle = ink;
       ctx.lineWidth = 1.15;
@@ -253,12 +309,14 @@ function action(label, onClick, className) {
 
 function badge(unit) {
   const frame = element('span', 'military-badge');
-  frame.style.setProperty('--nation', nationColor(unit.countryColor));
+  frame.style.setProperty('--nation', unit.kind === 'battle' ? battleAccent : nationColor(unit.countryColor));
   const canvas = element('canvas');
   canvas.width = 84;
   canvas.height = 60;
   canvas.setAttribute('aria-hidden', 'true');
-  symbol(canvas.getContext('2d'), 42, 30, 49, unit.type, '#ebeed8');
+  const ctx = canvas.getContext('2d');
+  if (unit.kind === 'battle') battleSymbol(ctx, 42, 30, 40);
+  else symbol(ctx, 42, 30, 49, unit.type, '#ebeed8');
   frame.append(canvas);
   return frame;
 }
@@ -488,12 +546,13 @@ export function showFormation(dialog, { result, actual, ideal }, evidence) {
 function rosterView(roster, actions) {
   const fragment = document.createDocumentFragment();
   const heading = element('section', 'military-hero');
-  const numberBadge = element('span', 'military-badge military-count', number.format(roster.units.length));
   const caption = element('div', 'military-hero-copy');
   const sameProvince = roster.units.every(unit => unit.provinceAddress === roster.units[0].provinceAddress);
-  caption.append(element('h3', '', '部署单位'), element('p', '',
-    sameProvince ? roster.units[0].provinceName || '同省部署' : '邻近部署'));
-  heading.append(numberBadge, caption);
+  const hasBattles = countBattles(roster.units) > 0;
+  caption.append(element('h3', '', hasBattles ? counterSummary(roster.units) : '部署单位'),
+    element('p', '', sameProvince ? roster.units[0].provinceName || '同省' : '邻近地点'));
+  if (!hasBattles) heading.append(element('span', 'military-badge military-count', number.format(roster.units.length)));
+  heading.append(caption);
   const controls = element('div', 'military-actions');
   controls.append(action('放大展开', () => actions.locate(roster.point), 'military-primary'));
   const list = element('ul', 'military-roster');

@@ -23,6 +23,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
@@ -47,7 +48,8 @@ class WorldViewerServerTest {
         var post = HttpRequest.newBuilder(URI.create(base + "/api/map"))
             .POST(HttpRequest.BodyPublishers.noBody()).timeout(Duration.ofSeconds(5)).build();
         assertEquals(405, http.send(post, HttpResponse.BodyHandlers.discarding()).statusCode());
-        assertEquals(genesis.stateHash(), json(http, base + "/api/map").path("stateHash").asText());
+        var original = json(http, base + "/api/map");
+        assertEquals(genesis.stateHash(), original.path("stateHash").asText());
         assertEquals(409, get(http, base + "/api/overview?node=main-0&hash=old&layer=terrain").statusCode());
         assertEquals(404, get(http, base + "/api/map?node=main-99").statusCode());
 
@@ -59,7 +61,8 @@ class WorldViewerServerTest {
         assertEquals(400, get(http, base + "/api/tile" + query + "&layer=region&level=2&x=16&y=0").statusCode());
 
         assertTrue(json(http, base + "/api/pick" + query + "&x=20&y=20").isNull());
-        assertEquals("province:west", json(http, base + "/api/pick" + query + "&x=50&y=50").path("stableId").asText());
+        var combined = json(http, base + "/api/pick" + query + "&x=50&y=50");
+        assertEquals("province:west", combined.path("stableId").asText());
         assertEquals("province:east", json(http, base + "/api/pick" + query + "&x=100&y=50").path("stableId").asText());
         assertEquals(400, get(http, base + "/api/pick" + query + "&layer=missing&x=50&y=50").statusCode());
         assertEquals(400, get(http, base + "/api/pick" + query + "&x=NaN&y=50").statusCode());
@@ -72,6 +75,9 @@ class WorldViewerServerTest {
           assertEquals("main-0/map/" + layer + "/" + kindId, west.path("address").asText());
           assertEquals(1, west.path("shape").path("parts").size());
           assertEquals(1, west.path("shape").path("parts").get(0).path("holes").size());
+          assertEquals(west.path("stableId"), combined.path(layer).path("stableId"));
+          assertEquals(west.path("address"), combined.path(layer).path("address"));
+          assertEquals(west.path("shape"), combined.path(layer).path("shape"));
           assertEquals(west, json(http, base + "/api/entity" + query + "&address=" + west.path("address").asText()));
           assertTrue(json(http, picking + "&x=20&y=20").isNull());
           var aggregate = png(http, base + "/api/overview" + query + "&layer=" + layer);
@@ -87,17 +93,54 @@ class WorldViewerServerTest {
             List.of(Map.of("op", "patchProvince", "id", "west", "name", "New West")), false);
         String oldProvince = base + "/api/province" + query + "&address=main-0/map/province/west";
         assertEquals("West", json(http, oldProvince).path("displayName").asText());
+        assertEquals(combined, json(http, oldProvince));
         assertEquals(1, json(http, base + "/api/nodes").path("total").asInt());
         app.save("gm:test", draft, 1, "viewer-save", 1, genesis.stateHash());
         assertEquals(2, json(http, base + "/api/nodes").path("total").asInt());
         var next = json(http, base + "/api/map");
         assertEquals("main-1", next.path("node").asText());
+        assertNotEquals(original.path("mapVersion"), next.path("mapVersion"));
+        assertEquals(original.path("mapVersion"),
+            json(http, base + "/api/map?node=main-0").path("mapVersion"));
         String newQuery = "?node=main-1&hash=" + next.path("stateHash").asText();
         assertEquals("New West", json(http, base + "/api/province" + newQuery
             + "&address=main-1/map/province/west").path("displayName").asText());
+        assertEquals("main-1/map/state/" + SampleWorld.STATE,
+            json(http, base + "/api/pick" + newQuery + "&x=50&y=50").path("state").path("address").asText());
         assertEquals("West", json(http, oldProvince).path("displayName").asText());
         assertEquals(400, get(http, base + "/api/province" + newQuery
             + "&address=main-0/map/province/west").statusCode());
+      }
+    }
+  }
+
+  @Test
+  void drawsReferencedRiversInDefaultTerrainOverviewAndTiles(@TempDir Path world) throws Exception {
+    try (var store = FileTimelineStore.create(world, SampleWorld.WORLD_ID)) {
+      var genesis = new TimelineService(store).createGenesis(SampleWorld.create(), "gm:test");
+      Files.writeString(world.resolve("geo-reference.json"), """
+          {
+            "format":"worldsim-geo-v1", "sheet":"fixture", "base":"main-0", "baseHash":"%s",
+            "width":200, "height":100, "source":"fixture", "affine":[100,1,0,50,0,-1],
+            "coverage":[{"x":-80,"y":-30},{"x":80,"y":-30},{"x":80,"y":30},{"x":-80,"y":30}],
+            "errorRadius":2, "check":{"controls":3,"tested":1,"matched":1,"maxError":1},
+            "places":[], "borders":[],
+            "rivers":{"source":"fixture", "sourceHash":"%s", "lines":[
+              {"width":11, "points":[{"x":40,"y":12.5},{"x":160,"y":12.5}]}
+            ]}
+          }
+          """.formatted(genesis.stateHash(), genesis.stateHash()));
+      try (var viewer = WorldViewerServer.start(new WorldApplicationService(store), 0);
+           var http = HttpClient.newHttpClient()) {
+        String base = "http://127.0.0.1:" + viewer.port();
+        String query = "?node=main-0&hash=" + genesis.stateHash() + "&layer=terrain";
+        var overview = png(http, base + "/api/overview" + query);
+        var tile = png(http, base + "/api/tile" + query + "&level=1&x=2&y=0");
+        for (int rgb : List.of(overview.getRGB(512, 128), tile.getRGB(128, 256))) {
+          int red = (rgb >> 16) & 0xff;
+          int blue = rgb & 0xff;
+          assertTrue(blue - red > 32, "河流在底图和瓦片中均呈蓝色");
+        }
       }
     }
   }

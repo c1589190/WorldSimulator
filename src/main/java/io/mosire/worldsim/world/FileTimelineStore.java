@@ -26,10 +26,12 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.function.Consumer;
 
 /** JSON world store. world.json is the sole publication point for nodes and checkpoint references. */
 public final class FileTimelineStore implements TimelineStore {
+  private final SnapshotFiles.MapCache cachedSnapshotMaps = new SnapshotFiles.MapCache();
   public static final int FORMAT_VERSION = 1;
 
   public record Manifest(int formatVersion, String worldId, String dataDirectory,
@@ -376,12 +378,18 @@ public final class FileTimelineStore implements TimelineStore {
   }
 
   @Override public synchronized Optional<String> checkpoint(NodeRef ref) {
+    return checkpointState(ref, null).map(StaticWorldState::canonicalJson);
+  }
+
+  @Override public synchronized Optional<StaticWorldState> checkpointState(
+      NodeRef ref, Function<StaticWorldState, String> cachedHash) {
     ensureOpen();
     String path = manifest.checkpoints().get(ref.label());
     if (path == null) return Optional.empty();
-    StaticWorldState state = new SnapshotFiles(world, manifest.dataDirectory()).read(path);
+    var snapshots = new SnapshotFiles(world, manifest.dataDirectory());
+    StaticWorldState state = cachedHash == null ? snapshots.read(path) : snapshots.read(path, cachedSnapshotMaps, cachedHash);
     if (!state.id().equals(manifest.worldId())) throw new TimelineException("WORLD_CHECKPOINT_HASH_MISMATCH", "快照 worldId 不一致");
-    return Optional.of(state.canonicalJson());
+    return Optional.of(state);
   }
 
   @Override public synchronized Optional<CommitReceipt> receipt(String actor, String requestId) {

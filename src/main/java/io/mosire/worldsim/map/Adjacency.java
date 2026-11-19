@@ -37,4 +37,8 @@ public record Adjacency(String a, String b, String kind, double borderLength, St
   public boolean connects(String x, String y) {
     return (a.equals(x) && b.equals(y)) || (a.equals(y) && b.equals(x));
   }
+
+  public boolean permitsLandMarch() {
+    return kind.equals("land") && borderLength > 0 && through == null;
+  }
 }

@@ -71,7 +71,7 @@ public final class MilOrgFormat {
         "name", subtree.name(), "personnel", tree.personnel, "equipTotal", tree.equipment, "data", tree.data);
     List<Map<String, String>> losses = new ArrayList<>();
     losses.add(Map.of("code", "native-ids", "message", "mil-org 不携带原生文档及编制节点 ID"));
-    losses.add(Map.of("code", "native-evidence", "message", "编制口径、来源、置信度和原生扩展需随原生文档保存"));
+    losses.add(Map.of("code", "native-evidence", "message", "编制口径、来源、置信度、行军速度和原生扩展需随原生文档保存"));
     if (tree.incomplete) losses.add(Map.of("code", "incomplete-strength",
         "message", "未知数量以兼容格式的零占位，未覆盖的装备不计入兼容合计"));
     return Map.of("format", "mil-org", "role", document.role(), "document", data, "lossReport", losses);

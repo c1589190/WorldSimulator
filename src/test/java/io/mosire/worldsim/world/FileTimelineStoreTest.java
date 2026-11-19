@@ -14,6 +14,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -109,6 +110,29 @@ class FileTimelineStoreTest {
       Files.writeString(changes, "{\"changes\":[]}");
       assertEquals("WORLD_CHANGE_HASH_MISMATCH", assertThrows(TimelineException.class, timeline::verifyAll).code());
       assertEquals("WORLD_REOPEN_REQUIRED", assertThrows(TimelineException.class, store::branches).code());
+    }
+  }
+
+  @Test
+  void cachedReplaySharesMapsAcrossForkCheckpointsAndFullVerificationReadsDisk(@TempDir Path temp) throws Exception {
+    Path world = temp.resolve("world");
+    try (var store = FileTimelineStore.create(world, SampleWorld.WORLD_ID)) {
+      var timeline = new TimelineService(store);
+      var root = timeline.createGenesis(SampleWorld.create(), "gm:test");
+      var fork = timeline.openFork(root.ref(), new BranchId("other"));
+      timeline.apply(fork, new WorldChange.SetSimulationTime("1936-01-01T01:00:00"));
+      var saved = timeline.save(fork, 1, "gm:test");
+      var work = timeline.openNext(saved.ref());
+      timeline.apply(work, new WorldChange.SetSimulationTime("1936-01-01T02:00:00"));
+      var next = timeline.save(work, 2, "gm:test");
+      var latest = timeline.loadCached(next.ref());
+      assertEquals(next.stateHash(), latest.contentHash());
+      assertSame(latest.map(), timeline.loadCached(saved.ref()).map());
+      assertSame(latest.map(), timeline.loadCached(root.ref()).map());
+      assertEquals(3, timeline.verifyAll());
+      var geometry = store.committedFiles().stream().filter(path -> path.contains("/objects/geometry/")).findFirst().orElseThrow();
+      Files.writeString(world.resolve(geometry), "\n", StandardOpenOption.APPEND);
+      assertEquals("WORLD_OBJECT_HASH_MISMATCH", assertThrows(TimelineException.class, timeline::verifyAll).code());
     }
   }
 

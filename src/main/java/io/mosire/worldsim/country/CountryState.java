@@ -1,5 +1,6 @@
 package io.mosire.worldsim.country;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import io.mosire.worldsim.address.NodeAddress;
 import io.mosire.worldsim.map.WorldMap;
 import io.mosire.worldsim.state.Evidence;
@@ -10,8 +11,13 @@ import java.util.Objects;
 import java.util.TreeMap;
 
 /** Country identities and province-level claims for a single timeline state. */
-public record CountryState(Map<String, Country> countries, Map<String, Territory> territories) {
+public record CountryState(Map<String, Country> countries, Map<String, Territory> territories,
+                           @JsonInclude(JsonInclude.Include.NON_EMPTY) Map<String, Map<String, Evidence>> transitRights) {
   public static final CountryState EMPTY = new CountryState(Map.of(), Map.of());
+
+  public CountryState(Map<String, Country> countries, Map<String, Territory> territories) {
+    this(countries, territories, Map.of());
+  }
 
   public record Country(String id, String name, List<String> aliases, String color,
                         String capitalProvinceId, Evidence evidence) {
@@ -40,9 +46,16 @@ public record CountryState(Map<String, Country> countries, Map<String, Territory
 
   public record Territory(Assignment owner, Assignment controller) {}
 
+  public record Passage(String status, String authorityCountryId, String basis, Evidence evidence) {
+    public boolean blocked() { return status.equals("blocked"); }
+  }
+
   public CountryState {
     countries = Map.copyOf(countries);
     territories = Map.copyOf(territories);
+    var rightCopy = new TreeMap<String, Map<String, Evidence>>();
+    if (transitRights != null) transitRights.forEach((country, guests) -> rightCopy.put(country, Map.copyOf(guests)));
+    transitRights = Map.copyOf(rightCopy);
     for (var entry : countries.entrySet()) {
       if (!entry.getKey().equals(entry.getValue().id())) throw new IllegalArgumentException("国家键与 ID 不一致");
     }
@@ -51,7 +64,7 @@ public record CountryState(Map<String, Country> countries, Map<String, Territory
   public CountryState withCountry(Country country) {
     var next = new TreeMap<>(countries);
     next.put(country.id(), country);
-    return new CountryState(next, territories);
+    return new CountryState(next, territories, transitRights);
   }
 
   public CountryState withTerritory(List<String> provinces, String field, Assignment assignment) {
@@ -66,7 +79,42 @@ public record CountryState(Map<String, Country> countries, Map<String, Territory
       if (value.owner() == null && value.controller() == null) next.remove(province);
       else next.put(province, value);
     }
-    return new CountryState(countries, next);
+    return new CountryState(countries, next, transitRights);
+  }
+
+  public CountryState withTransitRight(String grantor, String guest, Evidence evidence) {
+    if (!countries.containsKey(grantor) || !countries.containsKey(guest) || grantor.equals(guest)) {
+      throw new IllegalArgumentException("通行权需要不同的两个已登记国家");
+    }
+    if (evidence != null) new Assignment(grantor, evidence);
+    var rights = new TreeMap<>(transitRights);
+    var grants = new TreeMap<>(rights.getOrDefault(grantor, Map.of()));
+    if (evidence == null) grants.remove(guest);
+    else grants.put(guest, evidence);
+    if (grants.isEmpty()) rights.remove(grantor);
+    else rights.put(grantor, grants);
+    return new CountryState(countries, territories, rights);
+  }
+
+  public String authority(String provinceId) {
+    var territory = territories.get(provinceId);
+    if (territory == null) return null;
+    var authority = territory.controller() == null ? territory.owner() : territory.controller();
+    return authority == null ? null : authority.countryId();
+  }
+
+  public Passage entry(String guest, String provinceId) {
+    var territory = territories.get(provinceId);
+    if (territory == null) return new Passage("unknown", null, null, null);
+    var authority = territory.controller() == null ? territory.owner() : territory.controller();
+    if (authority == null) return new Passage("unknown", null, null, null);
+    String host = authority.countryId();
+    String basis = territory.controller() == null ? "owner" : "controller";
+    if (host.equals(guest)) return new Passage("domestic", host, basis, authority.evidence());
+    var permission = guest == null ? null : transitRights.getOrDefault(host, Map.of()).get(guest);
+    return permission == null
+        ? new Passage("blocked", host, basis, authority.evidence())
+        : new Passage("granted", host, basis, permission);
   }
 
   public void validate(WorldMap map) {
@@ -82,6 +130,15 @@ public record CountryState(Map<String, Country> countries, Map<String, Territory
       }
       requireCountry(entry.getValue().owner());
       requireCountry(entry.getValue().controller());
+    }
+    for (var entry : transitRights.entrySet()) {
+      if (!countries.containsKey(entry.getKey())) throw new IllegalArgumentException("通行授权国家不存在: " + entry.getKey());
+      for (var guest : entry.getValue().entrySet()) {
+        if (!countries.containsKey(guest.getKey()) || guest.getKey().equals(entry.getKey())) {
+          throw new IllegalArgumentException("通行受权国家无效: " + guest.getKey());
+        }
+        new Assignment(entry.getKey(), guest.getValue());
+      }
     }
   }
 

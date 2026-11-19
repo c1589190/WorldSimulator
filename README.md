@@ -99,9 +99,16 @@ java -Xmx5g -jar target/worldsim-0.1.0-SNAPSHOT.jar export
 java -Xmx5g -jar target/worldsim-0.1.0-SNAPSHOT.jar viewer
 ```
 
-在 Windows 或 WSL 浏览器打开 `http://127.0.0.1:8765/`。拖动平移，滚轮或按钮缩放。可输入地名、省 ID 或完整的节点地址。图层支持地形、州、战略区域、国家归属和实际控制着色，叠加铁路省链、补给中心和部署单位。点省份列表或单位标记可查看单位、部署及两份编制。页首选择已保存的时间线节点，也可用 `?node=<branch-tick>` 直接进入某个节点。默认端口可用 `viewer --port <port>` 调整。
+在 Windows 或 WSL 浏览器打开 `http://127.0.0.1:8765/`。拖动平移，滚轮或按钮缩放。可输入地名、省 ID 或完整的节点地址。底图支持地形、国家归属和实际控制着色，叠加铁路省链、补给中心和部署单位。点省份列表或单位标记可查看单位、部署及两份编制。页首选择分支，在线性时间线上查看剧本日期、节点和行军路径。可以前后步进，或用 `?node=<branch-tick>` 直接跳到节点。默认端口可用 `viewer --port <port>` 调整。
 
-「州」和「战略区域」图层合并区内省界，点击色块选中整区。搜索框也可直接输入独立 key `state:<id>` 或 `region:<id>`。详情显示该 key、节点地址和成员省数。
+点击一个地块，在底图上同时高亮它、所属州和战略区，右侧显示区域名称和独立 key。输入 `state:<id>` 或 `region:<id>` 可定位相应区域。
+
+世界的地理参考带有河流时，打开地图即可在底图上看到蓝色河道。1936 剧本准备脚本会为 Magna 欧洲图生成河流参考。已有配准文件可用下列命令增补河流，需 Python 和 Pillow。将输出文件作为运行目录下的 `world/geo-reference.json` 随世界加载。[图源与配准记录](docs/superpowers/specs/2026-11-19-readonly-map-viewer.md#河流接入方案)
+
+```bash
+python3 tools/river_reference.py --magna runtime/imports/MagnaEuropa \
+  --reference world/geo-reference.json --out runtime/geo-reference-with-rivers.json
+```
 
 已配准的世界支持多语地名和 `经度,纬度` 搜索。坐标误差范围触及省界时可选候选省。省份详情显示近似 WGS84 位置，点经纬度可在 OpenStreetMap 复核。德波样例可叠加有日期的史料边界。[1936 资料与导入复现](docs/superpowers/reports/2026-11-19-1936-source-research.md)
 
@@ -116,10 +123,19 @@ AgentLib 工具调用经过角色、工具和世界资源授权；调用身份�
 - `world_overview`、`world_lookup`、`world_search`、`world_validate`：读世界摘要、实体和地图拓扑，通过地名、别名和 ID 查询同一节点下的规范地址。`world_lookup` 默认省略 polygon 顶点。
 - `world_geo_lookup` 接受 `name` 或 `longitude` 与 `latitude`，可指定 `node`。单独传完整省份 `address` 可反查近似经纬度和已校对的地名对应。
 - `world_territory_gaps` 分页查待补归属的陆省，返回节点地址、州和史料预期国家。可传 `node`、`countryId`、`stateId`、`offset` 和 `limit`。传 `scope="all"` 可查看全图。
+- `world_movement_estimate` 接受完整单位 `address`，按实编返回最低行军速度及瓶颈节点。传 `route` 可估算分段与总耗时，路线为从部署省起步的同节点陆省地址数组。显式传 `role="ideal"` 可用理想编制试算。[速度字段和路线规则](docs/superpowers/specs/2026-11-20-unit-movement-duration.md)
+- `world_marches` 读取指定保存节点的行军路径、进度、预计抵达时间及部署省。
+- `world_supply_status` 按单位地址查现时部署点的铁路补给连通状态。
+- `world_battles` 按节点分页返回战斗结果。可用 `world_lookup` 查 `<node>/orbat/battle/<id>`。
 - `timeline_tree`、`timeline_diff`、`timeline_verify`：查看和完整验证已保存时间线。
+- `timeline_lineage` 按 `branch` 读取根到分支末端的线性序列及节点剧本时间。
 - `edit_open`、`edit_apply`、`edit_save`、`edit_discard`：打开内存草稿、批量预览/应用、保存或放弃。
 - `world_view`、`world_export`：重建可读视图，或导出全部已提交分支。
 - `orbat_export`：通过已保存的文档或编制节点地址返回 `mil-org` 和损失报告。
+
+行军沿用草稿预览、应用和保存。无时钟的剧本先提交 `{"op":"setSimulationTime","time":"1936-01-01T00:00:00"}`。用 `startMarch` 传当前基点下的单位 `address` 和陆省地址数组 `route`，再用 `{"op":"advanceTime","minutes":180}` 推进三个模拟小时。也可按顺序在同批预览。`cancelMarch` 用单位 `address` 停止行军。保存后在查看器的时间线切换节点核对路径和抵达省。[命令和回放契约](docs/superpowers/specs/2026-11-20-simulation-clock-and-marches.md)
+
+战斗裁决由 `resolveBattle` 进入同一草稿，预览会列出实编扣前、损失和扣后数量。行军以 `setTransitRight` 管理定向授权，估算和已记录路段给出通行、地形与补给因素。[字段和计算规则](docs/superpowers/specs/2026-11-20-battle-and-march-conditions.md)
 
 例如，运行在同一 WSL 环境、使用 `mcpServers` 配置格式的客户端可以这样启动服务：
 

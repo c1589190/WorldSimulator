@@ -14,6 +14,9 @@ import io.mosire.worldsim.map.StrategicRegion;
 import io.mosire.worldsim.map.SupplyHub;
 import io.mosire.worldsim.orbat.OrbatDocument;
 import io.mosire.worldsim.orbat.OrbatState;
+import io.mosire.worldsim.orbat.March;
+import io.mosire.worldsim.orbat.Battle;
+import io.mosire.worldsim.timeline.SimulationTime;
 
 import java.util.List;
 import java.util.Map;
@@ -43,7 +46,12 @@ import java.util.HashSet;
     @JsonSubTypes.Type(value = WorldChange.SetTerritory.class, name = "setTerritory"),
     @JsonSubTypes.Type(value = WorldChange.PutOrbatDocument.class, name = "putOrbatDocument"),
     @JsonSubTypes.Type(value = WorldChange.PutUnit.class, name = "putUnit"),
-    @JsonSubTypes.Type(value = WorldChange.DeployUnit.class, name = "deployUnit")
+    @JsonSubTypes.Type(value = WorldChange.DeployUnit.class, name = "deployUnit"),
+    @JsonSubTypes.Type(value = WorldChange.SetSimulationTime.class, name = "setSimulationTime"),
+    @JsonSubTypes.Type(value = WorldChange.StartMarch.class, name = "startMarch"),
+    @JsonSubTypes.Type(value = WorldChange.CancelMarch.class, name = "cancelMarch"),
+    @JsonSubTypes.Type(value = WorldChange.ResolveBattle.class, name = "resolveBattle"),
+    @JsonSubTypes.Type(value = WorldChange.SetTransitRight.class, name = "setTransitRight")
 })
 public sealed interface WorldChange permits
     WorldChange.PutProvince,
@@ -64,7 +72,12 @@ public sealed interface WorldChange permits
     WorldChange.SetTerritory,
     WorldChange.PutOrbatDocument,
     WorldChange.PutUnit,
-    WorldChange.DeployUnit {
+    WorldChange.DeployUnit,
+    WorldChange.SetSimulationTime,
+    WorldChange.StartMarch,
+    WorldChange.CancelMarch,
+    WorldChange.ResolveBattle,
+    WorldChange.SetTransitRight {
 
   record PutProvince(Province province) implements WorldChange {
     public PutProvince { requireValue(province, "province"); }
@@ -175,6 +188,32 @@ public sealed interface WorldChange permits
       NodeAddress.requireSegment(unitId);
       if (provinceId != null) NodeAddress.requireSegment(provinceId);
       requireValue(evidence, "evidence");
+    }
+  }
+
+  record SetSimulationTime(String time) implements WorldChange {
+    public SetSimulationTime { time = SimulationTime.normalize(time); }
+  }
+
+  record StartMarch(String unitId, March march) implements WorldChange {
+    public StartMarch {
+      NodeAddress.requireSegment(unitId);
+      requireValue(march, "march");
+    }
+  }
+
+  record CancelMarch(String unitId) implements WorldChange {
+    public CancelMarch { NodeAddress.requireSegment(unitId); }
+  }
+
+  record ResolveBattle(Battle battle) implements WorldChange {
+    public ResolveBattle { requireValue(battle, "battle"); }
+  }
+
+  record SetTransitRight(String grantorId, String guestId, Evidence evidence) implements WorldChange {
+    public SetTransitRight {
+      NodeAddress.requireSegment(grantorId);
+      NodeAddress.requireSegment(guestId);
     }
   }
 

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.mosire.worldsim.json.JsonCodec;
+import io.mosire.worldsim.country.CountryState;
 import io.mosire.worldsim.map.Adjacency;
 import io.mosire.worldsim.map.EntityLink;
 import io.mosire.worldsim.map.Province;
@@ -63,19 +64,40 @@ public record WorldChangeSet(List<WorldChange> changes) {
     Objects.requireNonNull(base, "base");
     var country = base.countries();
     var orbat = base.formations();
+    String time = base.simulationTime();
     List<WorldChange> mapChanges = new ArrayList<>();
     for (WorldChange change : changes) {
       switch (change) {
         case WorldChange.PutCountry op -> country = country.withCountry(op.country());
         case WorldChange.SetTerritory op -> country = country.withTerritory(op.provinceIds(), op.field(), op.assignment());
+        case WorldChange.SetTransitRight op -> country = country.withTransitRight(op.grantorId(), op.guestId(), op.evidence());
         case WorldChange.PutOrbatDocument op -> orbat = orbat.withDocument(op.document());
-        case WorldChange.PutUnit op -> orbat = orbat.withUnit(op.unit());
-        case WorldChange.DeployUnit op -> orbat = orbat.deploy(op.unitId(), op.provinceId(), op.evidence());
+        case WorldChange.PutUnit op -> orbat = orbat.withUnit(op.unit(), time);
+        case WorldChange.DeployUnit op -> orbat = orbat.deploy(op.unitId(), op.provinceId(), op.evidence(), time);
+        case WorldChange.SetSimulationTime op -> {
+          if (time != null && op.time().compareTo(time) < 0) throw new IllegalArgumentException("剧本时间不能倒退");
+          orbat = orbat.advanceMarches(time, op.time(), country);
+          time = op.time();
+        }
+        case WorldChange.StartMarch op -> {
+          if (time == null) time = op.march().startedAt();
+          orbat = orbat.startMarch(op.unitId(), op.march(), time);
+        }
+        case WorldChange.CancelMarch op -> orbat = orbat.cancelMarch(op.unitId(), time);
+        case WorldChange.ResolveBattle op -> {
+          var battle = op.battle();
+          if (time == null) time = battle.endedAt();
+          orbat = orbat.resolveBattle(battle, time);
+          if (battle.control() != null) {
+            country = country.withTerritory(List.of(battle.provinceId()), "controller",
+                new CountryState.Assignment(battle.control().countryId(), battle.evidence()));
+          }
+        }
         default -> mapChanges.add(change);
       }
     }
     WorldMap map = mapChanges.isEmpty() ? base.map() : applyMap(base.map(), mapChanges);
-    return new StaticWorldState(base.id(), map, country, orbat);
+    return new StaticWorldState(base.id(), map, country, orbat, time);
   }
 
   private static WorldMap applyMap(WorldMap base, List<WorldChange> mapChanges) {

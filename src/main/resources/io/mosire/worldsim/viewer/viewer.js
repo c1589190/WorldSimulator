@@ -1,16 +1,19 @@
 import {
-  COUNTER_HIDE_ZOOM, drawUnitCounters, layoutUnitCounters, renderMilitary, showFormation, STACK_ZOOM
+  COUNTER_HIDE_ZOOM, counterSummary, drawUnitCounters, layoutUnitCounters, renderMilitary, showFormation, STACK_ZOOM
 } from './military.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('map');
 const context = canvas.getContext('2d', { alpha: false });
 const nodes = $('nodes');
+const branchPicker = $('branch');
+const timelineTrack = $('timeline-track');
 const queryInput = $('province-query');
 const railwayToggle = $('railways');
 const hubToggle = $('hubs');
 const borderToggle = $('geo-borders');
 const unitToggle = $('units');
+const marchToggle = $('marches');
 const unitZoomNote = $('unit-zoom-note');
 const militaryPanel = $('military-panel');
 const formationDialog = $('formation-dialog');
@@ -21,22 +24,27 @@ const terrainNames = {
 };
 const kindNames = { land: '陆地', sea: '海域', lake: '湖泊' };
 const entityNames = { province: '省份', state: '州', region: '战略区域', country: '国家',
-  unit: '单位', orbatDocument: '编制文档', orbatNode: '编制节点' };
-const areaLayers = new Set(['state', 'region']);
+  unit: '单位', orbatDocument: '编制文档', orbatNode: '编制节点', battle: '战斗' };
+const battleOutcomes = { 'attacker-victory': '攻方胜利', 'defender-victory': '守方胜利', draw: '平局', disengaged: '脱离接触' };
+const supplyNames = { connected: '补给连通', disconnected: '补给不通', unknown: '补给未知' };
+const areaKinds = new Set(['state', 'region']);
 const number = new Intl.NumberFormat('zh-CN');
-const timeline = new Map();
 const tileLimit = 96;
-const renderVersion = 2;
+const overviewLimit = 4;
+const renderVersion = 3;
 const minimumMapZoom = .8;
+const overviews = new Map();
+const tiles = new Map();
 
 let view;
 let mapRequest;
 let nodeListRequest;
+let timeline;
 let selectionRequest;
 let armyRequest;
-let nextOffset = 0;
 let layer = 'terrain';
 let selection;
+let selectedBattleAddress;
 let armyState;
 let unitHits = [];
 let drag;
@@ -80,37 +88,87 @@ function searchStatus(message = '', error = false) {
   $('search-status').classList.toggle('error', error);
 }
 
-async function loadNodes(reset = false) {
+async function loadNodes(branch, followHead = false) {
   nodeListRequest?.abort();
+  if (followHead) mapRequest?.abort();
   const request = new AbortController();
   nodeListRequest = request;
-  $('more-nodes').disabled = true;
   try {
-    const page = await json('/api/nodes', { offset: reset ? 0 : nextOffset }, request.signal);
+    const page = await json('/api/timeline', { branch }, request.signal);
     if (request.signal.aborted) return;
-    if (reset) timeline.clear();
-    for (const row of page.nodes) timeline.set(row.node, row);
-    nextOffset = page.offset + page.nodes.length;
-    $('more-nodes').hidden = nextOffset >= page.total;
+    if (followHead && page.head !== view?.info.node) {
+      await loadMap(page.head, page);
+      return;
+    }
+    if (view && !page.nodes.some((row) => row.node === view.info.node) && branch !== view.info.branch) {
+      await loadNodes(view.info.branch);
+      return;
+    }
+    timeline = page;
     updateNodes();
   } catch (error) {
-    if (!request.signal.aborted) status('节点列表读取失败 · ' + error.message);
-  } finally {
-    if (!request.signal.aborted) $('more-nodes').disabled = false;
+    if (!request.signal.aborted) {
+      if (view && branch !== view.info.branch) await loadNodes(view.info.branch);
+      else status('时间线读取失败 · ' + error.message);
+    }
   }
 }
 
-function updateNodes() {
-  const labels = [...timeline.keys()];
-  const current = view?.info.node;
-  if (current && !timeline.has(current)) labels.push(current);
-  nodes.replaceChildren(...labels.map((label) => new Option(label, label)));
-  nodes.disabled = labels.length === 0;
-  if (current) nodes.value = current;
+function clockLabel(clock) {
+  if (!clock) return '日期未知';
+  if (clock.precision === 'date') return clock.time.slice(0, 10);
+  return clock.time.replace('T', ' ').replace(/:00$/, '');
 }
 
-async function loadMap(node) {
+function updateNodes() {
+  const current = view?.info;
+  const rows = timeline?.nodes || (current ? [current] : []);
+  const index = rows.findIndex((row) => row.node === current?.node);
+  nodes.replaceChildren(...rows.map((row) => new Option(clockLabel(row.clock) + ' · ' + row.node, row.node)));
+  nodes.disabled = rows.length === 0;
+  if (current) nodes.value = current.node;
+  branchPicker.replaceChildren(...(timeline?.branches || []).map((branch) => new Option(branch, branch)));
+  branchPicker.disabled = !timeline;
+  if (timeline) branchPicker.value = timeline.branch;
+  $('timeline-prev').disabled = index <= 0;
+  $('timeline-next').disabled = index < 0 || index >= rows.length - 1;
+  const scroll = timelineTrack.scrollLeft;
+  timelineTrack.replaceChildren(...rows.map((row) => {
+    const item = document.createElement('li');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.node = row.node;
+    button.title = row.clock?.source || row.node;
+    button.append(textElement('span', clockLabel(row.clock)), textElement('code', row.node));
+    if (row.node === current?.node) button.setAttribute('aria-current', 'step');
+    button.addEventListener('click', () => loadMap(row.node));
+    item.append(button);
+    return item;
+  }));
+  timelineTrack.scrollLeft = scroll;
+  const selected = timelineTrack.querySelector('[aria-current=step]');
+  if (selected) {
+    const track = timelineTrack.getBoundingClientRect();
+    const item = selected.getBoundingClientRect();
+    if (item.left < track.left) timelineTrack.scrollLeft -= track.left - item.left + 5;
+    if (item.right > track.right) timelineTrack.scrollLeft += item.right - track.right + 5;
+  }
+  if (timeline && index >= 0) {
+    const address = new URL(window.location.href);
+    address.searchParams.set('branch', timeline.branch);
+    window.history.replaceState(null, '', address);
+  }
+}
+
+function stepTimeline(delta) {
+  const rows = timeline?.nodes || [];
+  const index = rows.findIndex((row) => row.node === view?.info.node);
+  if (index >= 0 && rows[index + delta]) loadMap(rows[index + delta].node);
+}
+
+async function loadMap(node, branchPage) {
   mapRequest?.abort();
+  if (!branchPage) nodeListRequest?.abort();
   selectionRequest?.abort();
   armyRequest?.abort();
   if (armyState) setArmyState(null);
@@ -120,11 +178,22 @@ async function loadMap(node) {
   try {
     const info = await json('/api/map', { node }, request.signal);
     if (request.signal.aborted) return null;
-    if (view) {
-      view.requests.abort();
-      for (const entry of [...view.overview.values(), ...view.tiles.values()]) discardImage(entry);
+    const first = !view;
+    const keepCamera = view && view.info.width === info.width && view.info.height === info.height;
+    view?.requests.abort();
+    view = { info, requests: new AbortController() };
+    updateCounterHover();
+    if (branchPage) timeline = branchPage;
+    if (!timeline?.nodes.some((row) => row.node === info.node)) {
+      timeline = null;
+      loadNodes(first ? initialUrl.searchParams.get('branch') || info.branch : info.branch);
     }
-    view = { info, overview: new Map(), tiles: new Map(), requests: new AbortController() };
+    $('march-option').hidden = !info.marches;
+    $('march-panel').hidden = true;
+    $('march-list').replaceChildren();
+    $('battle-panel').hidden = true;
+    $('battle-list').replaceChildren();
+    $('more-battles').hidden = true;
     $('geo-border-option').hidden = !info.geographicReference;
     $('geo-border-source').hidden = true;
     queryInput.placeholder = info.geographicReference ? '地名、Key、地址或经度,纬度' : '名称、ID、Key 或节点地址';
@@ -141,11 +210,14 @@ async function loadMap(node) {
       + number.format(info.states) + ' 州  ·  ' + number.format(info.regions) + ' 战略区域';
     $('map-counts').hidden = false;
     updateNodes();
-    fitMap();
+    if (keepCamera) containMap();
+    else fitMap();
     loadLogistics();
     loadGeographicBorders();
     loadTerritoryGaps();
     loadUnits();
+    loadMarches();
+    loadBattles();
     return view;
   } catch (error) {
     if (!request.signal.aborted) {
@@ -239,32 +311,42 @@ function resize() {
 
 function image(cache, key, source) {
   const entry = cache.get(key);
-  if (entry) {
+  if (entry && (entry.state !== 'failed' || entry.source === source)) {
     cache.delete(key);
     cache.set(key, entry);
     return entry;
   }
-  const target = view;
+  cache.delete(key);
   const picture = new Image();
-  const next = { picture, state: 'loading' };
+  const next = { picture, source, state: 'loading' };
   picture.onload = () => {
     next.state = 'ready';
-    if (view === target) scheduleDraw();
+    scheduleDraw();
   };
   picture.onerror = () => {
     next.state = 'failed';
-    if (view === target) scheduleDraw();
+    scheduleDraw();
   };
   cache.set(key, next);
   picture.src = source;
   return next;
 }
 
-function discardImage(entry) {
-  if (entry.state !== 'loading') return;
-  entry.picture.onload = null;
-  entry.picture.onerror = null;
-  entry.picture.removeAttribute('src');
+function trimImages(cache, limit) {
+  while (cache.size > limit) {
+    const key = cache.keys().next().value;
+    const entry = cache.get(key);
+    entry.picture.onload = null;
+    entry.picture.onerror = null;
+    if (entry.state === 'loading') entry.picture.removeAttribute('src');
+    cache.delete(key);
+  }
+}
+
+function renderKey(info) {
+  if (layer === 'owner-gaps') return info.stateHash + '/' + layer;
+  const key = info.mapVersion + '/' + layer;
+  return layer === 'owner' || layer === 'controller' ? key + '/' + info.politicsVersion : key;
 }
 
 function draw() {
@@ -272,15 +354,18 @@ function draw() {
   unitHits = [];
   const relativeZoom = view ? scale / fitScale() : 1;
   const belowCounterZoom = relativeZoom < COUNTER_HIDE_ZOOM;
-  unitZoomNote.toggleAttribute('hidden', !view?.info.units || !unitToggle.checked || !belowCounterZoom);
+  const hasCounters = view && (view.info.units || view.info.battleMarkers.length);
+  unitZoomNote.toggleAttribute('hidden', !hasCounters || !unitToggle.checked || !belowCounterZoom);
   if (belowCounterZoom || !unitToggle.checked) updateCounterHover();
   context.setTransform(density, 0, 0, density, 0, 0);
   context.fillStyle = '#122630';
   context.fillRect(0, 0, width, height);
   if (!view) return;
 
-  const { info, overview } = view;
-  const base = image(overview, layer, url('/api/overview', { ...version(view), layer, renderVersion }));
+  const { info } = view;
+  const key = renderKey(info);
+  const base = image(overviews, key, url('/api/overview', { ...version(view), layer, renderVersion }));
+  trimImages(overviews, overviewLimit);
   if (base.state !== 'ready') {
     if (!mapRequest) status(base.state === 'failed' ? '底图加载失败，可刷新重试。' : '正在绘制底图…');
     return;
@@ -296,16 +381,17 @@ function draw() {
   context.clip();
   context.drawImage(base.picture, 0, 0,
     base.picture.naturalWidth / info.overviewScale, base.picture.naturalHeight / info.overviewScale);
-  drawTiles();
+  drawTiles(key);
   drawLogistics();
   drawGeographicBorders();
   drawSelection();
+  drawMarches();
   context.restore();
   if (!belowCounterZoom) drawUnits(relativeZoom);
 }
 
-function drawTiles() {
-  const { info, tiles } = view;
+function drawTiles(renderKey) {
+  const { info } = view;
   let level = Math.min(info.maxTileLevel, Math.floor(Math.log2(scale * density / info.overviewScale)));
   while (level > 0) {
     const tilePixels = info.tileSize * scale / (info.overviewScale * 2 ** level);
@@ -322,16 +408,12 @@ function drawTiles() {
   const lastY = Math.min(Math.ceil(info.height / step), Math.ceil((height - top) / scale / step));
   for (let y = firstY; y < lastY; y++) {
     for (let x = firstX; x < lastX; x++) {
-      const key = [layer, level, x, y].join('/');
+      const key = [renderKey, level, x, y].join('/');
       const tile = image(tiles, key, url('/api/tile', { ...version(view), layer, level, x, y, renderVersion }));
       if (tile.state === 'ready') context.drawImage(tile.picture, x * step, y * step, step, step);
     }
   }
-  while (tiles.size > tileLimit) {
-    const key = tiles.keys().next().value;
-    discardImage(tiles.get(key));
-    tiles.delete(key);
-  }
+  trimImages(tiles, tileLimit);
 }
 
 async function loadLogistics() {
@@ -429,14 +511,167 @@ function drawLogistics() {
 
 function drawSelection() {
   if (!selection) return;
-  context.fillStyle = '#f9ce7870';
-  context.fill(selection.path, 'evenodd');
-  context.strokeStyle = '#33261c';
-  context.lineWidth = 3.8 / scale;
-  context.stroke(selection.path);
-  context.strokeStyle = '#ffe0a1';
-  context.lineWidth = 1.8 / scale;
-  context.stroke(selection.path);
+  const shapes = [
+    { shape: selection.region, fill: '#328b9730', border: '#a0f1ee', outline: '#214b56', width: 1.6, dash: [6, 4] },
+    { shape: selection.state, fill: '#e4a34a3b', border: '#f4bc78', outline: '#51381f', width: 1.8, dash: [] },
+    { shape: selection.province, fill: '#f9ce785c', border: '#fff1bd', outline: '#33261c', width: 2, dash: [] },
+  ].filter(({ shape }) => shape);
+  for (const { shape, fill } of shapes) {
+    context.fillStyle = fill;
+    context.fill(shape.path, 'evenodd');
+  }
+  // Dash the region outline over any state edges that share its boundary.
+  for (const { shape, outline, width: strokeWidth } of shapes) {
+    context.strokeStyle = outline;
+    context.lineWidth = (strokeWidth + 2) / scale;
+    context.stroke(shape.path);
+  }
+  for (const { shape, border, width: strokeWidth, dash } of [...shapes].reverse()) {
+    context.setLineDash(dash.map((length) => length / scale));
+    context.strokeStyle = border;
+    context.lineWidth = strokeWidth / scale;
+    context.stroke(shape.path);
+  }
+  context.setLineDash([]);
+}
+
+function marchLine(points) {
+  const path = new Path2D();
+  path.moveTo(points[0].x, points[0].y);
+  for (const point of points.slice(1)) path.lineTo(point.x, point.y);
+  return path;
+}
+
+function marchDrawing(march) {
+  const { points, reachedLegs, fraction } = march;
+  if (points.length < 2) return march;
+  const from = points[reachedLegs];
+  const to = points[reachedLegs + 1];
+  const position = to ? { x: from.x + (to.x - from.x) * fraction, y: from.y + (to.y - from.y) * fraction } : from;
+  return {
+    ...march,
+    position,
+    outline: marchLine(points),
+    reached: marchLine([...points.slice(0, reachedLegs + 1), position]),
+    remaining: to ? marchLine([position, ...points.slice(reachedLegs + 1)]) : null,
+  };
+}
+
+function drawMarches() {
+  if (!marchToggle.checked || !view.marches?.length) return;
+  context.save();
+  context.lineJoin = 'round';
+  context.lineCap = 'round';
+  for (const march of view.marches) {
+    if (!march.outline) continue;
+    context.strokeStyle = '#213439';
+    context.lineWidth = 4.5 / scale;
+    context.stroke(march.outline);
+    const remainingColor = { cancelled: '#b2b6b2', blocked: '#ff9b84' }[march.status] || '#ffd794';
+    if (march.remaining) {
+      context.strokeStyle = remainingColor;
+      context.lineWidth = 2.1 / scale;
+      context.setLineDash([6 / scale, 4 / scale]);
+      context.stroke(march.remaining);
+      context.setLineDash([]);
+    }
+    context.strokeStyle = '#86e8d8';
+    context.lineWidth = 2.4 / scale;
+    context.stroke(march.reached);
+    const end = march.points.at(-1);
+    context.beginPath();
+    context.arc(end.x, end.y, 3.6 / scale, 0, 2 * Math.PI);
+    context.strokeStyle = march.remaining ? remainingColor : '#86e8d8';
+    context.lineWidth = 1.6 / scale;
+    context.fillStyle = '#213439';
+    context.fill();
+    context.stroke();
+    if (march.status === 'moving') {
+      context.beginPath();
+      context.arc(march.position.x, march.position.y, 3.4 / scale, 0, 2 * Math.PI);
+      context.fillStyle = '#86e8d8';
+      context.fill();
+    }
+  }
+  context.restore();
+}
+
+function focusMarch(march) {
+  if (march.points.length) {
+    const x = march.points.map((point) => point.x);
+    const y = march.points.map((point) => point.y);
+    const minX = Math.min(...x);
+    const minY = Math.min(...y);
+    const maxX = Math.max(...x);
+    const maxY = Math.max(...y);
+    fitSelection({ width: maxX - minX, height: maxY - minY,
+      point: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 } });
+  }
+  openEntity(march.unitAddress, false);
+}
+
+async function loadMarches() {
+  const target = view;
+  if (!target?.info.marches) return;
+  try {
+    const result = await json('/api/marches', version(target), target.requests.signal);
+    if (view !== target) return;
+    target.marches = result.marches.map(marchDrawing);
+    $('march-panel').hidden = target.marches.length === 0;
+    $('march-list').replaceChildren(...target.marches.map((march) => {
+      const label = { moving: '行军中', arrived: '已抵达', cancelled: '已取消', blocked: '通行受阻' }[march.status];
+      const time = clockLabel({ time: march.blockage?.time || march.cancelledAt || march.arrivalTime });
+      const detail = label + ' · ' + march.reachedLegs + '/' + march.legs.length + ' 段 · ' + time;
+      const item = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.append(textElement('span', march.name), textElement('span', detail, 'march-meta'));
+      const conditions = march.legs[march.reachedLegs]?.conditions;
+      if (march.blockage) {
+        button.append(textElement('span', '下一省管理方 ' + march.blockage.passage.authorityCountryId, 'march-meta'));
+      } else if (march.status === 'moving' && conditions) {
+        const terrain = terrainNames[conditions.terrain] || conditions.terrain;
+        const supply = supplyNames[conditions.supply.status];
+        button.append(textElement('span', terrain + ' · ' + supply + ' · '
+          + number.format(conditions.effectiveSpeedKmPerHour) + ' 公里/小时', 'march-meta'));
+      }
+      button.addEventListener('click', () => focusMarch(march));
+      item.append(button);
+      return item;
+    }));
+    scheduleDraw();
+  } catch (error) {
+    if (!target.requests.signal.aborted) status('行军读取失败 · ' + error.message);
+  }
+}
+
+async function loadBattles(offset = 0) {
+  const target = view;
+  if (!target?.info.battles || target.loadingBattles) return;
+  target.loadingBattles = true;
+  const more = $('more-battles');
+  more.disabled = true;
+  try {
+    const page = await json('/api/battles', { ...version(target), offset }, target.requests.signal);
+    if (view !== target) return;
+    $('battle-panel').hidden = !page.total;
+    const items = page.battles.map((battle) => {
+      const item = document.createElement('li');
+      const button = linkButton(battle.displayName, battle.address);
+      const label = battleOutcomes[battle.entity.outcome] || battle.entity.outcome;
+      button.append(textElement('span', label + ' · ' + clockLabel({ time: battle.entity.endedAt }), 'battle-meta'));
+      item.append(button);
+      return item;
+    });
+    $('battle-list').append(...items);
+    more.dataset.offset = page.offset + page.battles.length;
+    more.hidden = Number(more.dataset.offset) >= page.total;
+  } catch (error) {
+    if (!target.requests.signal.aborted) status('战斗记录读取失败 · ' + error.message);
+  } finally {
+    target.loadingBattles = false;
+    if (view === target) more.disabled = false;
+  }
 }
 
 async function loadUnits() {
@@ -447,6 +682,7 @@ async function loadUnits() {
     const units = await json('/api/units', version(target), target.requests.signal);
     if (view !== target) return;
     target.units = units;
+    target.counterLayout = null;
     scheduleDraw();
   } catch (error) {
     if (!target.requests.signal.aborted) status('单位图层加载失败 · ' + error.message);
@@ -456,17 +692,19 @@ async function loadUnits() {
 }
 
 function drawUnits(relativeZoom) {
-  if (!unitToggle.checked || !view.units?.length) return;
+  if (!unitToggle.checked || (!view.units?.length && !view.info.battleMarkers.length)) return;
   const camera = [left, top, width, height, scale];
   if (!view.counterLayout || camera.some((value, index) => value !== view.counterLayout.camera[index])) {
-    view.counterLayout = { camera, hits: layoutUnitCounters(view.units,
+    view.counterLayout = { camera, hits: layoutUnitCounters([...(view.units || []), ...view.info.battleMarkers],
       { left, top, width, height, scale, zoom: relativeZoom }) };
   }
   unitHits = view.counterLayout.hits;
-  drawUnitCounters(context, unitHits, armyState?.selected || noUnitSelection);
+  const armySelection = armyState?.selected || noUnitSelection;
+  const selected = selectedBattleAddress ? new Set([...armySelection, selectedBattleAddress]) : armySelection;
+  drawUnitCounters(context, unitHits, selected);
 }
 
-function selectShape(shape, point) {
+function shapeSelection(shape, point) {
   const path = new Path2D();
   let minX = Infinity;
   let minY = Infinity;
@@ -486,26 +724,37 @@ function selectShape(shape, point) {
       path.closePath();
     }
   }
-  selection = { path, width: maxX - minX, height: maxY - minY,
+  return { path, width: maxX - minX, height: maxY - minY,
     point: point || { x: (minX + maxX) / 2, y: (minY + maxY) / 2 } };
 }
 
-function fitSelection() {
-  const fit = Math.min(width / selection.width, height / selection.height) * .55;
+function fitSelection(shape) {
+  const fit = Math.min(width / shape.width, height / shape.height) * .55;
   scale = between(fit, fitScale(), maxScale());
-  left = width / 2 - selection.point.x * scale;
-  top = height / 2 - selection.point.y * scale;
+  left = width / 2 - shape.point.x * scale;
+  top = height / 2 - shape.point.y * scale;
   containMap();
+}
+
+function showProvinceArea(kind, area, fallback) {
+  const field = $('province-' + kind);
+  field.textContent = area?.displayName || fallback || '—';
+  if (area) field.append(' · ', textElement('code', area.stableId));
 }
 
 function selectProvince(result) {
   $('entity-detail').hidden = true;
+  selectedBattleAddress = null;
   $('province').hidden = !result;
   $('empty-province').hidden = Boolean(result);
   selection = null;
   if (result) {
     const province = result.entity;
-    selectShape(province.shape, province.displayPoint);
+    selection = {
+      province: shapeSelection(province.shape, province.displayPoint),
+      state: result.state && shapeSelection(result.state.shape),
+      region: result.region && shapeSelection(result.region.shape),
+    };
     $('province-name').textContent = result.displayName;
     $('province-kind').textContent = kindNames[province.kind] || province.kind;
     $('province-id').textContent = province.id;
@@ -518,8 +767,8 @@ function selectProvince(result) {
       link.textContent = longitude + ', ' + latitude;
       link.href = `https://www.openstreetmap.org/?mlat=${latitude}&mlon=${longitude}#map=10/${latitude}/${longitude}`;
     }
-    $('province-state').textContent = result.stateName || province.stateId || '—';
-    $('province-region').textContent = result.regionName || province.regionId || '—';
+    showProvinceArea('state', result.state, result.stateName || province.stateId);
+    showProvinceArea('region', result.region, result.regionName || province.regionId);
     $('province-owner-row').hidden = !view.info.countries;
     $('province-controller-row').hidden = !view.info.countries;
     $('province-owner').textContent = result.ownerName || '未知';
@@ -666,12 +915,12 @@ async function openEntity(address, center = true, { roster } = {}) {
   if (parts[0] !== view.info.node && !await loadMap(parts[0])) return;
   clearSearchResults();
   if (parts[1] === 'map' && parts[2] === 'province') {
-    await findMapEntity('/api/province', { address }, center);
+    await findProvince('/api/province', { address }, center);
     return;
   }
   const target = view;
   const request = new AbortController();
-  const military = parts[1] === 'orbat';
+  const military = parts[1] === 'orbat' && parts[2] !== 'battle';
   if (military) {
     armyRequest?.abort();
     armyRequest = request;
@@ -700,6 +949,10 @@ async function openEntity(address, center = true, { roster } = {}) {
       showFormation(formationDialog, state, evidenceLine);
       return;
     }
+    if (areaKinds.has(result.kind) && result.point) {
+      await findProvince('/api/pick', result.point, center, result.shape);
+      return;
+    }
     showEntity(result, center);
   } catch (error) {
     if (request.signal.aborted) return;
@@ -710,7 +963,9 @@ async function openEntity(address, center = true, { roster } = {}) {
 
 function showEntity(result, center) {
   const content = [];
-  if (result.kind === 'country') {
+  if (result.kind === 'battle') {
+    content.push(...battleDetail(result));
+  } else if (result.kind === 'country') {
     const control = result.controlledProvinces > 0
       ? '已记录控制 ' + number.format(result.controlledProvinces) + ' 省' : '控制范围暂无记录';
     content.push(textElement('p', '已记录归属 ' + number.format(result.ownedProvinces) + ' 省 · ' + control));
@@ -724,18 +979,50 @@ function showEntity(result, center) {
     }
   }
   selectProvince(null);
+  if (result.kind === 'battle') selectedBattleAddress = result.address;
   $('empty-province').hidden = true;
   $('entity-detail').hidden = false;
   $('entity-kind').textContent = entityNames[result.kind] || result.kind;
   $('entity-name').textContent = result.displayName;
-  $('entity-key').hidden = !areaLayers.has(result.kind);
+  $('entity-key').hidden = !areaKinds.has(result.kind);
   $('entity-key').textContent = 'Key ' + result.stableId;
   $('entity-address').textContent = result.address;
   $('entity-content').replaceChildren(...content);
-  if (result.shape) {
-    selectShape(result.shape);
-    if (center) fitSelection();
-  } else if (center && result.point) centerMap(result.point, 4);
+  if (center && result.point) centerMap(result.point, 4);
+}
+
+function battleDetail(result) {
+  const { entity } = result;
+  const conclusion = battleOutcomes[entity.outcome] || entity.outcome;
+  const rows = [textElement('p', conclusion + ' · ' + clockLabel({ time: entity.endedAt })),
+    textElement('p', entity.rationale), evidenceLine(entity.evidence)];
+  const units = new Map();
+  for (const [label, participants] of [['攻方', result.attackers], ['守方', result.defenders]]) {
+    rows.push(textElement('h4', label));
+    for (const participant of participants) {
+      units.set(participant.address.split('/').at(-1), participant.name);
+      rows.push(linkButton(participant.name, participant.address, false));
+    }
+  }
+  if (result.controllerName) rows.push(textElement('p', '战后控制 · ' + result.controllerName));
+  if (entity.losses.length) {
+    rows.push(textElement('h4', '直属损耗'));
+    const list = document.createElement('ul');
+    list.className = 'battle-losses';
+    for (const loss of entity.losses) {
+      const counts = loss.equipment.map((item) => lossText(item.name || item.itemId, item.quantity));
+      if (loss.personnel) counts.unshift(lossText('人员', loss.personnel));
+      list.append(textElement('li', (units.get(loss.unitId) || loss.unitId) + ' / ' + loss.nodeId + ' · ' + counts.join('、')));
+    }
+    rows.push(list);
+  }
+  if (result.provinceAddress) rows.push(linkButton('查看交战省', result.provinceAddress, false));
+  return rows;
+}
+
+function lossText(label, count) {
+  const before = count.before == null ? '基数未知' : number.format(count.before) + ' → ' + number.format(count.after);
+  return label + ' −' + number.format(count.lost) + '（' + before + '）';
 }
 
 async function searchEntities(query) {
@@ -803,7 +1090,7 @@ async function showGeographicResult(result) {
   }
 }
 
-async function findMapEntity(path, parameters, center = false) {
+async function findProvince(path, parameters, center = false, focusShape) {
   const target = view;
   if (!target || mapRequest) return;
   selectionRequest?.abort();
@@ -814,13 +1101,9 @@ async function findMapEntity(path, parameters, center = false) {
   try {
     const result = await json(path, { ...version(target), ...parameters }, request.signal);
     if (view !== target || request.signal.aborted) return;
-    if (result && result.kind !== 'province') {
-      showEntity(result, center);
-    } else {
-      selectProvince(result);
-      if (!result) searchStatus('此处没有' + (entityNames[parameters.layer] || '省份') + '。');
-      else if (center) fitSelection();
-    }
+    selectProvince(result);
+    if (!result) searchStatus('此处没有地块。');
+    else if (center) fitSelection(focusShape ? shapeSelection(focusShape) : selection.province);
   } catch (error) {
     if (!request.signal.aborted) searchStatus(error.message, true);
   }
@@ -828,7 +1111,6 @@ async function findMapEntity(path, parameters, center = false) {
 
 function showLegend() {
   const items = [];
-  $('empty-province').textContent = '点击地图查看' + (entityNames[layer] || '省份') + '。';
   if (layer === 'terrain') {
     for (const [key, label] of Object.entries(terrainNames)) {
       const entry = document.createElement('li');
@@ -842,8 +1124,6 @@ function showLegend() {
     const note = document.createElement('li');
     note.className = 'legend-note';
     note.textContent = {
-      state: '点击色块选择整州。',
-      region: '点击色块选择整个战略区。',
       owner: '有归属记录的省按国家着色。',
       controller: '有控制记录的省按实际控制方着色。',
       'owner-gaps': '粉色标出待补归属的陆省。'
@@ -894,14 +1174,14 @@ function cursor(event) {
 }
 
 function counterAt(point) {
-  if (!unitToggle.checked || !view || scale / fitScale() < COUNTER_HIDE_ZOOM) return undefined;
+  if (!unitToggle.checked || !view || mapRequest || scale / fitScale() < COUNTER_HIDE_ZOOM) return undefined;
   return unitHits.findLast((hit) => Math.abs(hit.x - point.x) <= hit.width / 2
     && Math.abs(hit.y - point.y) <= hit.height / 2);
 }
 
 function updateCounterHover(counter) {
   canvas.classList.toggle('over-counter', Boolean(counter));
-  const title = counter?.units.length > 1 ? number.format(counter.units.length) + ' 个部署单位'
+  const title = counter?.units.length > 1 ? counterSummary(counter.units)
     : counter?.units[0]?.name || '';
   if (canvas.title !== title) canvas.title = title;
 }
@@ -938,7 +1218,7 @@ canvas.addEventListener('pointerup', (event) => {
     else {
       const location = { x: (point.x - left) / scale, y: (point.y - top) / scale };
       closeMilitary();
-      findMapEntity('/api/pick', { ...location, layer });
+      findProvince('/api/pick', location);
     }
   }
   drag = null;
@@ -1016,19 +1296,18 @@ function closeMilitary() {
   setArmyState(null);
   canvas.focus({ preventScroll: true });
 }
-const requestedLayer = new URLSearchParams(window.location.search).get('layer');
+const initialUrl = new URL(window.location.href);
+const requestedLayer = initialUrl.searchParams.get('layer');
+if (areaKinds.has(requestedLayer)) {
+  initialUrl.searchParams.set('layer', 'terrain');
+  window.history.replaceState(null, '', initialUrl);
+}
 document.querySelectorAll('input[name="layer"]').forEach((input) => {
   if (input.value === requestedLayer) {
     layer = requestedLayer;
     input.checked = true;
   }
   input.addEventListener('change', () => {
-    if (areaLayers.has(layer) || areaLayers.has(input.value)) {
-      selectionRequest?.abort();
-      selectProvince(null);
-      clearSearchResults();
-      searchStatus();
-    }
     layer = input.value;
     const location = new URL(window.location.href);
     location.searchParams.set('layer', layer);
@@ -1040,6 +1319,7 @@ document.querySelectorAll('input[name="layer"]').forEach((input) => {
   });
 });
 $('more-territory-gaps').addEventListener('click', () => loadTerritoryGaps(Number($('more-territory-gaps').dataset.offset)));
+$('more-battles').addEventListener('click', () => loadBattles(Number($('more-battles').dataset.offset)));
 for (const toggle of [railwayToggle, hubToggle]) {
   toggle.addEventListener('change', () => {
     loadLogistics();
@@ -1058,14 +1338,15 @@ $('zoom-in').addEventListener('click', () => zoom(1.5));
 $('zoom-out').addEventListener('click', () => zoom(1 / 1.5));
 $('fit').addEventListener('click', fitMap);
 $('reload').addEventListener('click', () => {
-  loadNodes(true);
-  loadMap(view?.info.node);
+  loadNodes(timeline?.branch || view?.info.branch, Boolean(view?.info.node === timeline?.head));
 });
-$('more-nodes').addEventListener('click', () => loadNodes());
+branchPicker.addEventListener('change', () => loadNodes(branchPicker.value, true));
+$('timeline-prev').addEventListener('click', () => stepTimeline(-1));
+$('timeline-next').addEventListener('click', () => stepTimeline(1));
 nodes.addEventListener('change', () => loadMap(nodes.value));
+marchToggle.addEventListener('change', scheduleDraw);
 
 new ResizeObserver(resize).observe($('viewport'));
 resize();
 showLegend();
-loadNodes(true);
 loadMap(new URLSearchParams(window.location.search).get('node'));

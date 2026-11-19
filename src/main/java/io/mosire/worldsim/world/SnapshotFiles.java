@@ -33,6 +33,8 @@ import java.util.function.Function;
 public final class SnapshotFiles {
   private static final int VERSION = 1;
   private static final int CHUNK_SIZE = 512;
+  private static final List<String> MAP_CATEGORIES = List.of(
+      "province", "geometry", "state", "region", "supplyHub", "railway", "link", "adjacency");
   private final WorldDirectory world;
   private final String dataDirectory;
 
@@ -42,7 +44,15 @@ public final class SnapshotFiles {
   }
 
   public record Manifest(int formatVersion, String stateId, String mapId, String mapName,
-      double width, double height, String stateHash, Map<String, List<String>> chunks) {}
+      double width, double height, String stateHash, Map<String, List<String>> chunks, String simulationTime) {}
+
+  private record MapChunks(String id, String name, double width, double height, Map<String, List<String>> refs) {}
+
+  static final class MapCache {
+    private final LinkedHashMap<MapChunks, WorldMap> maps = new LinkedHashMap<>(4, .75f, true) {
+      @Override protected boolean removeEldestEntry(Map.Entry<MapChunks, WorldMap> entry) { return size() > 2; }
+    };
+  }
 
   public record ProvinceInfo(String id, String name, String kind, String terrain, Vec2 displayPoint,
       String stateId, String regionId, List<String> tags) {
@@ -81,7 +91,7 @@ public final class SnapshotFiles {
     if (state.country() != null) refs.put("country", chunks("country", List.of(state.country())));
     if (state.orbat() != null) refs.put("orbat", chunks("orbat", List.of(state.orbat())));
     Manifest manifest = new Manifest(VERSION, state.id(), map.id(), map.name(), map.width(), map.height(),
-        state.contentHash(), refs);
+        state.contentHash(), refs, state.simulationTime());
     String relative = dataDirectory + "/snapshots/" + UUID.randomUUID() + "/snapshot.json";
     DurableFiles.writeNew(world.resolve(relative), JsonCodec.prettyJson(manifest));
     return relative;
@@ -128,7 +138,30 @@ public final class SnapshotFiles {
   }
 
   public StaticWorldState read(String relative) {
+    return read(relative, null, StaticWorldState::contentHash);
+  }
+
+  StaticWorldState read(String relative, MapCache cache, Function<StaticWorldState, String> hash) {
     Manifest m = readManifest(relative);
+    MapChunks key = null;
+    WorldMap map = null;
+    if (cache != null) {
+      var chunks = new LinkedHashMap<String, List<String>>();
+      for (String category : MAP_CATEGORIES) chunks.put(category, List.copyOf(refs(m, category)));
+      key = new MapChunks(m.mapId(), m.mapName(), m.width(), m.height(), Map.copyOf(chunks));
+      map = cache.maps.get(key);
+    }
+    if (map == null) map = readMap(m);
+    StaticWorldState state = new StaticWorldState(m.stateId(), map,
+        readOptionalDomain(m, "country", CountryState.class), readOptionalDomain(m, "orbat", OrbatState.class), m.simulationTime());
+    if (!hash.apply(state).equals(m.stateHash())) {
+      throw new TimelineException("WORLD_SNAPSHOT_HASH_MISMATCH", "快照内容 hash 不一致: " + relative);
+    }
+    if (cache != null) cache.maps.put(key, map);
+    return state;
+  }
+
+  private WorldMap readMap(Manifest m) {
     List<ProvinceInfo> infos = readList(m, "province", ProvinceInfo.class);
     Map<String, ProvinceShape> geometry = new TreeMap<>();
     for (String ref : refs(m, "geometry")) {
@@ -154,19 +187,13 @@ public final class SnapshotFiles {
     if (!geometry.isEmpty()) {
       throw new TimelineException("WORLD_SNAPSHOT_PROVINCE", "存在没有省信息的几何: " + geometry.keySet().iterator().next());
     }
-    WorldMap map = new WorldMap(m.mapId(), m.mapName(), m.width(), m.height(), provinces,
+    return new WorldMap(m.mapId(), m.mapName(), m.width(), m.height(), provinces,
         keyed(readList(m, "state", State.class), State::id),
         keyed(readList(m, "region", StrategicRegion.class), StrategicRegion::id),
         keyed(readList(m, "supplyHub", SupplyHub.class), SupplyHub::id),
         keyed(readList(m, "railway", Railway.class), Railway::id),
         keyed(readList(m, "link", EntityLink.class), EntityLink::key),
         readList(m, "adjacency", Adjacency.class));
-    StaticWorldState state = new StaticWorldState(m.stateId(), map,
-        readOptionalDomain(m, "country", CountryState.class), readOptionalDomain(m, "orbat", OrbatState.class));
-    if (!state.contentHash().equals(m.stateHash())) {
-      throw new TimelineException("WORLD_SNAPSHOT_HASH_MISMATCH", "快照内容 hash 不一致: " + relative);
-    }
-    return state;
   }
 
   private <T> T readOptionalDomain(Manifest manifest, String category, Class<T> type) {

@@ -4,10 +4,12 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import io.mosire.worldsim.address.AddressException;
 import io.mosire.worldsim.address.NodeAddress;
+import io.mosire.worldsim.app.RiverReference;
 import io.mosire.worldsim.app.WorldApplicationService;
 import io.mosire.worldsim.app.WorldApplicationService.SavedMap;
 import io.mosire.worldsim.json.JsonCodec;
 import io.mosire.worldsim.map.Province;
+import io.mosire.worldsim.map.ProvinceShape;
 import io.mosire.worldsim.map.Vec2;
 import io.mosire.worldsim.map.WorldMap;
 import io.mosire.worldsim.timeline.TimelineException;
@@ -21,6 +23,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -30,7 +33,14 @@ public final class WorldViewerServer implements AutoCloseable {
 
   private record HubMark(String id, String provinceId, int level, Vec2 point) {}
   private record RailLine(String id, int level, List<Vec2> points) {}
-  private record Frame(WorldMap map, ViewerMap viewer) {}
+  private static final class Frame {
+    final WorldMap map;
+    final String version = UUID.randomUUID().toString();
+    ViewerMap viewer;
+
+    Frame(WorldMap map) { this.map = map; }
+  }
+  private record AreaSelection(String displayName, String stableId, String address, ProvinceShape shape) {}
 
   private final WorldApplicationService app;
   private final HttpServer server;
@@ -116,6 +126,7 @@ public final class WorldViewerServer implements AutoCloseable {
       case "/api/nodes" -> json(exchange, 200, app.tree(
           integer(query.getOrDefault("offset", "0"), "offset"),
           integer(query.getOrDefault("limit", "100"), "limit")));
+      case "/api/timeline" -> json(exchange, 200, app.lineage(query.get("branch")));
       case "/api/map" -> json(exchange, 200, info(app.savedMap(query.get("node"))));
       case "/api/overview", "/api/tile" -> render(exchange, query, path.equals("/api/tile"));
       case "/api/province" -> json(exchange, 200, province(snapshot(query), NodeAddress.parse(required(query, "address"))));
@@ -137,6 +148,9 @@ public final class WorldViewerServer implements AutoCloseable {
           query.get("scope"), query.get("countryId"), query.get("stateId"),
           integer(query.getOrDefault("offset", "0"), "offset"), integer(query.getOrDefault("limit", "25"), "limit")));
       case "/api/units" -> json(exchange, 200, app.unitMarkers(snapshot(query).node().label()));
+      case "/api/marches" -> json(exchange, 200, app.marches(snapshot(query)));
+      case "/api/battles" -> json(exchange, 200, app.battles(snapshot(query),
+          integer(query.getOrDefault("offset", "0"), "offset"), integer(query.getOrDefault("limit", "25"), "limit")));
       case "/api/pick" -> {
         SavedMap saved = snapshot(query);
         Vec2 point = new Vec2(coordinate(query, "x"), coordinate(query, "y"));
@@ -159,8 +173,9 @@ public final class WorldViewerServer implements AutoCloseable {
 
   private Map<String, Object> info(SavedMap saved) {
     WorldMap map = saved.map();
-    return Map.ofEntries(Map.entry("worldId", app.worldId()), Map.entry("mapName", map.name()),
+    var result = new HashMap<String, Object>(Map.ofEntries(Map.entry("worldId", app.worldId()), Map.entry("mapName", map.name()),
         Map.entry("node", saved.node().label()), Map.entry("stateHash", saved.stateHash()),
+        Map.entry("branch", saved.node().branch().value()),
         Map.entry("width", map.width()), Map.entry("height", map.height()),
         Map.entry("overviewScale", ViewerMap.overviewScale(map)), Map.entry("tileSize", ViewerMap.TILE_SIZE),
         Map.entry("maxTileLevel", ViewerMap.MAX_LEVEL), Map.entry("provinces", map.provinces().size()),
@@ -168,7 +183,15 @@ public final class WorldViewerServer implements AutoCloseable {
         Map.entry("supplyHubs", map.supplyHubs().size()), Map.entry("railways", map.railways().size()),
         Map.entry("countries", saved.state().countries().countries().size()),
         Map.entry("units", saved.state().formations().units().size()),
-        Map.entry("geographicReference", app.hasGeographicReference()));
+        Map.entry("marches", saved.state().formations().marches().size()),
+        Map.entry("battles", saved.state().formations().battles().size()),
+        Map.entry("geographicReference", app.hasGeographicReference())));
+    result.put("mapVersion", frameFor(map).version);
+    result.put("politicsVersion", JsonCodec.sha256(JsonCodec.canonicalJson(saved.state().countries())));
+    result.put("battleMarkers", app.battleMarkers(saved));
+    var clock = app.clock(saved);
+    if (clock != null) result.put("clock", clock);
+    return result;
   }
 
   private Map<String, Object> pick(SavedMap saved, ViewerMap.Layer layer, Vec2 point) {
@@ -217,8 +240,16 @@ public final class WorldViewerServer implements AutoCloseable {
         if (!e.code().equals("GEO_REFERENCE_INVALID")) throw e;
       }
     }
-    if (province.stateId() != null) result.put("stateName", saved.map().states().get(province.stateId()).name());
-    if (province.regionId() != null) result.put("regionName", saved.map().strategicRegions().get(province.regionId()).name());
+    if (province.stateId() != null) {
+      var state = saved.map().states().get(province.stateId());
+      result.put("stateName", state.name());
+      result.put("state", areaSelection(saved, ViewerMap.Layer.STATE, state.id(), state.name()));
+    }
+    if (province.regionId() != null) {
+      var region = saved.map().strategicRegions().get(province.regionId());
+      result.put("regionName", region.name());
+      result.put("region", areaSelection(saved, ViewerMap.Layer.REGION, region.id(), region.name()));
+    }
     var countries = saved.state().countries();
     var territory = countries.territories().get(province.id());
     if (territory != null) {
@@ -230,6 +261,12 @@ public final class WorldViewerServer implements AutoCloseable {
       }
     }
     return result;
+  }
+
+  private AreaSelection areaSelection(SavedMap saved, ViewerMap.Layer layer, String id, String name) {
+    String kind = layer == ViewerMap.Layer.STATE ? "state" : "region";
+    var address = new NodeAddress(saved.node(), List.of("map", kind, id));
+    return new AreaSelection(name, kind + ":" + id, address.canonical(), frame(saved).area(layer, id).shape());
   }
 
   private static Map<String, Object> logistics(WorldMap map) {
@@ -260,18 +297,32 @@ public final class WorldViewerServer implements AutoCloseable {
     send(exchange, 200, "image/png", png);
   }
 
-  private synchronized ViewerMap frame(SavedMap saved) {
+  private synchronized Frame frameFor(WorldMap map) {
     for (int i = 0; i < frames.size(); i++) {
-      if (frames.get(i).map() == saved.map()) {
+      if (frames.get(i).map == map) {
         Frame found = frames.remove(i);
         frames.addLast(found);
-        return found.viewer();
+        return found;
       }
     }
-    var next = new ViewerMap(saved.map());
-    frames.addLast(new Frame(saved.map(), next));
+    Frame next = new Frame(map);
+    frames.addLast(next);
     if (frames.size() > 2) frames.removeFirst();
     return next;
+  }
+
+  private synchronized ViewerMap frame(SavedMap saved) {
+    Frame frame = frameFor(saved.map());
+    if (frame.viewer != null) return frame.viewer;
+    RiverReference rivers = null;
+    try {
+      rivers = app.riverReference(saved);
+    } catch (TimelineException e) {
+      if (!e.code().equals("GEO_REFERENCE_INVALID")) throw e;
+      System.err.println(e.getMessage());
+    }
+    frame.viewer = new ViewerMap(saved.map(), rivers);
+    return frame.viewer;
   }
 
   private static Map<String, String> query(String raw) {

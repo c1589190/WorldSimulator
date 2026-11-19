@@ -42,8 +42,10 @@ public final class WorldView {
       counts.put(category.getKey(), index);
     }
     Pointer next = new Pointer(node.label(), state.contentHash(), directory);
-    DurableFiles.writeNew(world.resolve(directory + "/manifest.json"), JsonCodec.prettyJson(Map.of(
-        "node", next.node(), "stateHash", next.stateHash(), "worldId", state.id(), "chunks", counts)));
+    var manifest = new LinkedHashMap<>(Map.of(
+        "node", next.node(), "stateHash", next.stateHash(), "worldId", state.id(), "chunks", counts));
+    if (state.simulationTime() != null) manifest.put("simulationTime", state.simulationTime());
+    DurableFiles.writeNew(world.resolve(directory + "/manifest.json"), JsonCodec.prettyJson(manifest));
     Path current = world.resolve("view/current.json");
     Pointer previous = null;
     if (Files.isRegularFile(current)) {

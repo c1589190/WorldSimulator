@@ -17,6 +17,7 @@ import numpy as np
 from PIL import Image
 from shapely.geometry import MultiPoint, Point, shape
 from shapely.ops import transform
+from river_reference import load_magna_rivers
 
 
 DAY = date(1936, 1, 1)
@@ -513,6 +514,7 @@ def main():
     names = [{key: row[key] for key in ("provinceId", "names", "longitude", "latitude", "source")} for row in matches]
     reference.update({"format": "worldsim-geo-v1", "sheet": "europe-main", "base": pointer["node"],
                       "baseHash": pointer["stateHash"], "source": NATURAL_EARTH, "places": names, "borders": borders})
+    reference["rivers"] = load_magna_rivers(args.magna, (reference["width"], reference["height"]))
     searched = ("Berlin", "Warsaw", "Kielce", "Würzburg", "Gdańsk") if args.continue_from else (
         "Berlin", "Warsaw", "Kielce", "Würzburg")
     geo_checks = [{"name": row["earthName"], "provinceId": row["provinceId"]}
