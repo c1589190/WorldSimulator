@@ -3,6 +3,7 @@ package io.mosire.worldsim.timeline;
 import io.mosire.worldsim.address.BranchId;
 import io.mosire.worldsim.address.NodeRef;
 import io.mosire.worldsim.map.ValidationIssue;
+import io.mosire.worldsim.map.PolygonTopology;
 import io.mosire.worldsim.map.WorldMapValidator;
 import io.mosire.worldsim.state.StaticWorldState;
 import io.mosire.worldsim.state.WorldChange;
@@ -11,6 +12,8 @@ import io.mosire.worldsim.state.WorldChangeSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * Headless 时间线服务：唯一写路径为 working copy → ChangeSet → saved node。
@@ -133,10 +136,40 @@ public final class TimelineService {
 
   /** 逐节点重放，返回验证节点数；用于 CLI/回归检查。 */
   public int verifyAll() {
+    store.verifyStorageIntegrity();
     int verified = 0;
     for (BranchId branch : store.branches()) {
+      NodeRef previousRef = null;
+      StaticWorldState previousState = null;
       for (TimelineNode node : store.nodes(branch)) {
-        load(node.ref());
+        if (node.parent() == null) {
+          if (!WorldChangeSet.fromJson(node.changeSetJson()).isEmpty()) {
+            throw new TimelineException("TIMELINE_GENESIS_CHANGESET_INVALID", "创世节点增量必须为空: " + node.ref());
+          }
+          previousState = load(node.ref());
+        } else {
+          StaticWorldState parent = node.parent().equals(previousRef) ? previousState : load(node.parent());
+          StaticWorldState replayed;
+          try {
+            replayed = WorldChangeSet.fromJson(node.changeSetJson()).apply(parent);
+          } catch (RuntimeException e) {
+            throw new TimelineException("TIMELINE_CHANGESET_APPLY_FAILED", "完整校验无法应用增量: " + node.ref(), e);
+          }
+          requireHash(node, replayed, "full-replay");
+          requireValidState(replayed);
+          Optional<String> checkpoint = store.checkpoint(node.ref());
+          if (checkpoint.isPresent()) {
+            StaticWorldState snap;
+            try {
+              snap = StaticWorldState.fromJson(checkpoint.get());
+            } catch (RuntimeException e) {
+              throw new TimelineException("TIMELINE_CHECKPOINT_INVALID", "checkpoint JSON 无法解析: " + node.ref(), e);
+            }
+            requireHash(node, snap, "checkpoint");
+          }
+          previousState = replayed;
+        }
+        previousRef = node.ref();
         verified++;
       }
     }
@@ -152,6 +185,11 @@ public final class TimelineService {
    * 带 expectedContentHash 的推进打开：hash 不匹配说明调用方持有过期状态，操作不得开始。
    */
   public TimelineWorkingCopy openNext(NodeRef savedRef, String expectedContentHash) {
+    return openNext(savedRef, expectedContentHash, null);
+  }
+
+  /** A previously loaded immutable state may be reused after checking its hash and validity. */
+  public TimelineWorkingCopy openNext(NodeRef savedRef, String expectedContentHash, StaticWorldState preparedState) {
     TimelineNode base = requireSavedNode(savedRef);
     requireExpectedContentHash(base, expectedContentHash);
     NodeRef head = store.head(base.ref().branch())
@@ -161,7 +199,7 @@ public final class TimelineService {
       throw new TimelineException("TIMELINE_FORK_REQUIRED",
           "历史节点不能原地推进；请从该节点 fork 新分支: node=" + base.ref() + " head=" + head);
     }
-    StaticWorldState state = load(base.ref());
+    StaticWorldState state = preparedState(base, preparedState);
     return new TimelineWorkingCopy(base, state, TimelineWorkingCopy.Kind.ADVANCE, base.ref().branch());
   }
 
@@ -172,6 +210,11 @@ public final class TimelineService {
 
   /** 带 expectedContentHash 的 fork 打开。 */
   public TimelineWorkingCopy openFork(NodeRef savedRef, BranchId newBranch, String expectedContentHash) {
+    return openFork(savedRef, newBranch, expectedContentHash, null);
+  }
+
+  public TimelineWorkingCopy openFork(NodeRef savedRef, BranchId newBranch, String expectedContentHash,
+      StaticWorldState preparedState) {
     Objects.requireNonNull(newBranch, "newBranch");
     TimelineNode base = requireSavedNode(savedRef);
     requireExpectedContentHash(base, expectedContentHash);
@@ -182,7 +225,7 @@ public final class TimelineService {
     if (store.branches().contains(newBranch)) {
       throw new TimelineException("TIMELINE_BRANCH_EXISTS", "fork 目标分支已存在: " + newBranch);
     }
-    StaticWorldState state = load(base.ref());
+    StaticWorldState state = preparedState(base, preparedState);
     return new TimelineWorkingCopy(base, state, TimelineWorkingCopy.Kind.FORK, newBranch);
   }
 
@@ -196,10 +239,18 @@ public final class TimelineService {
   public TimelineWorkingCopy applyAll(TimelineWorkingCopy workingCopy, List<? extends WorldChange> changes) {
     Objects.requireNonNull(workingCopy, "workingCopy");
     Objects.requireNonNull(changes, "changes");
-    for (WorldChange change : changes) {
-      workingCopy.append(change);
-    }
+    workingCopy.appendAll(changes);
     return workingCopy;
+  }
+
+  /** Validate a candidate before a batch changes the draft. */
+  public void validateCandidate(TimelineWorkingCopy copy, StaticWorldState candidate, List<WorldChange> changes) {
+    Objects.requireNonNull(copy, "copy");
+    if (!copy.isOpen()) throw new TimelineException("TIMELINE_WORKING_COPY_CLOSED", "working copy 已关闭");
+    requireValidState(candidate);
+    List<WorldChange> all = new java.util.ArrayList<>(copy.pendingChanges());
+    all.addAll(changes);
+    requireNoNewTopologyIssues(copy.baseState(), candidate, all);
   }
 
   /** 丢弃内存更改；不会写时间线，也不会移动 head。 */
@@ -221,6 +272,12 @@ public final class TimelineService {
    */
   public TimelineNode save(TimelineWorkingCopy workingCopy, long targetTick, String savedBy,
       String expectedContentHash) {
+    return save(workingCopy, targetTick, savedBy, expectedContentHash, null);
+  }
+
+  /** Save a node and its optional idempotency receipt as one store publication. */
+  public TimelineNode save(TimelineWorkingCopy workingCopy, long targetTick, String savedBy,
+      String expectedContentHash, CommitReceipt receipt) {
     Objects.requireNonNull(workingCopy, "workingCopy");
     requireSavedBy(savedBy);
     requireExpectedContentHash(workingCopy.baseNode(), expectedContentHash);
@@ -253,7 +310,11 @@ public final class TimelineService {
 
     StaticWorldState state = workingCopy.currentState();
     requireValidState(state);
+    requireNoNewTopologyIssues(workingCopy.baseState(), state, workingCopy.pendingChanges());
     NodeRef target = new NodeRef(targetBranch, targetTick);
+    if (receipt != null && !target.equals(receipt.node())) {
+      throw new TimelineException("TIMELINE_RECEIPT_INVALID", "提交回执节点与目标不一致: " + target);
+    }
     String stateJson = state.canonicalJson();
 
     List<TimelineNode> existing = store.nodes(targetBranch);
@@ -266,7 +327,7 @@ public final class TimelineService {
         state.contentHash(),
         System.currentTimeMillis(),
         savedBy);
-    store.saveNode(node, checkpoint ? stateJson : null);
+    store.saveNode(node, checkpoint ? stateJson : null, receipt);
     workingCopy.markSaved(target);
     return node;
   }
@@ -285,6 +346,13 @@ public final class TimelineService {
             "节点未保存或不存在: " + ref));
   }
 
+  private StaticWorldState preparedState(TimelineNode base, StaticWorldState state) {
+    if (state == null) return load(base.ref());
+    requireHash(base, state, "prepared-state");
+    requireValidState(state);
+    return state;
+  }
+
   private static void requireSavedBy(String savedBy) {
     if (savedBy == null || savedBy.isBlank()) {
       throw new TimelineException("TIMELINE_SAVED_BY_INVALID", "savedBy 不得为空白");
@@ -298,6 +366,30 @@ public final class TimelineService {
       throw new TimelineException("TIMELINE_STATE_INVALID",
           "静态状态校验失败: " + issues.size() + " 个问题；首个: "
               + first.code() + " " + first.message());
+    }
+  }
+
+  private static void requireNoNewTopologyIssues(StaticWorldState base, StaticWorldState state,
+      List<WorldChange> changes) {
+    boolean spatialChange = changes.stream().anyMatch(change -> switch (change) {
+      case WorldChange.PutProvince op -> {
+        var before = base.map().provinces().get(op.province().id());
+        yield before == null || !before.shape().equals(op.province().shape())
+            || !before.kind().equals(op.province().kind());
+      }
+      case WorldChange.PatchProvince op -> op.fields().containsKey("shape") || op.fields().containsKey("kind");
+      case WorldChange.RemoveProvince ignored -> true;
+      case WorldChange.ReplaceAdjacencies ignored -> true;
+      case WorldChange.PutRailway ignored -> true;
+      case WorldChange.RemoveRailway ignored -> true;
+      default -> false;
+    });
+    if (!spatialChange) return;
+    Set<String> before = PolygonTopology.consistencyIssues(base.map());
+    Set<String> after = new TreeSet<>(PolygonTopology.consistencyIssues(state.map()));
+    after.removeAll(before);
+    if (!after.isEmpty()) {
+      throw new TimelineException("TIMELINE_TOPOLOGY_INVALID", "修改引入新的拓扑不一致: " + after.iterator().next());
     }
   }
 

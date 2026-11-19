@@ -9,6 +9,9 @@ public record NodeRef(BranchId branch, long tick) implements Comparable<NodeRef>
     if (tick < 0) {
       throw new IllegalArgumentException("tick 必须 >= 0: " + tick);
     }
+    if (branch.value().length() + 1 + Long.toString(tick).length() > NodeAddress.MAX_LENGTH) {
+      throw new IllegalArgumentException("节点坐标超过地址长度上限: " + NodeAddress.MAX_LENGTH);
+    }
   }
 
   public String label() {

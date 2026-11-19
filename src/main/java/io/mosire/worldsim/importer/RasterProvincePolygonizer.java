@@ -102,6 +102,7 @@ final class RasterProvincePolygonizer {
     Map<Integer, Vec2> displayPoints = new LinkedHashMap<>();
     int ringsTraced = 0;
     int repaired = 0;
+    List<Integer> repairedIds = new ArrayList<>();
     List<Integer> sortedIds = new ArrayList<>(new TreeSet<>(usedProvinceIds));
     for (int id : sortedIds) {
       LongList edges = edgesByProvince.get(id);
@@ -119,10 +120,11 @@ final class RasterProvincePolygonizer {
       shapes.put(id, shape.shape());
       displayPoints.put(id, shape.displayPoint());
       repaired += shape.repaired() ? 1 : 0;
+      if (shape.repaired()) repairedIds.add(id);
     }
 
     return new Result(Map.copyOf(shapes), Map.copyOf(displayPoints),
-        Map.copyOf(borderLengths), ringsTraced, repaired);
+        Map.copyOf(borderLengths), ringsTraced, repaired, List.copyOf(repairedIds));
   }
 
   private static List<Ring> traceRings(LongList edgeList, int vertexWidth) {
@@ -460,7 +462,8 @@ final class RasterProvincePolygonizer {
       Map<Integer, Vec2> displayPoints,
       Map<Long, Integer> borderLengths,
       int ringsTraced,
-      int repaired) {}
+      int repaired,
+      List<Integer> repairedProvinceIds) {}
 
   private record ShapeResult(ProvinceShape shape, Vec2 displayPoint, boolean repaired) {}
 

@@ -1,6 +1,8 @@
 package io.mosire.worldsim.state;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.core.type.TypeReference;
 import io.mosire.worldsim.json.JsonCodec;
 import io.mosire.worldsim.map.Adjacency;
 import io.mosire.worldsim.map.EntityLink;
@@ -10,6 +12,8 @@ import io.mosire.worldsim.map.State;
 import io.mosire.worldsim.map.StrategicRegion;
 import io.mosire.worldsim.map.SupplyHub;
 import io.mosire.worldsim.map.WorldMap;
+import io.mosire.worldsim.map.ProvinceShape;
+import io.mosire.worldsim.map.Vec2;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -68,6 +72,20 @@ public record WorldChangeSet(List<WorldChange> changes) {
     for (WorldChange change : changes) {
       switch (change) {
         case WorldChange.PutProvince op -> provinces.put(op.province().id(), op.province());
+        case WorldChange.PatchProvince op -> {
+          Province old = provinces.get(op.provinceId());
+          if (old == null) throw new IllegalArgumentException("省不存在: " + op.provinceId());
+          Map<String, JsonNode> fields = op.fields();
+          ProvinceShape shape = fields.containsKey("shape")
+              ? JsonCodec.mapper().convertValue(fields.get("shape"), ProvinceShape.class) : old.shape();
+          Vec2 point = fields.containsKey("displayPoint")
+              ? JsonCodec.mapper().convertValue(fields.get("displayPoint"), Vec2.class) : old.displayPoint();
+          List<String> tags = fields.containsKey("tags")
+              ? JsonCodec.mapper().convertValue(fields.get("tags"), new TypeReference<List<String>>() {}) : old.tags();
+          provinces.put(op.provinceId(), new Province(old.id(), patchText(fields, "name", old.name()),
+              patchText(fields, "kind", old.kind()), patchText(fields, "terrain", old.terrain()), shape, point,
+              patchText(fields, "stateId", old.stateId()), patchText(fields, "regionId", old.regionId()), tags));
+        }
         case WorldChange.RemoveProvince op -> {
           provinces.remove(op.provinceId());
           for (Map.Entry<String, State> entry : states.entrySet()) {
@@ -149,5 +167,13 @@ public record WorldChangeSet(List<WorldChange> changes) {
   private static void removeLinksTargeting(Map<String, EntityLink> links, String category, String targetId) {
     links.entrySet().removeIf(entry -> entry.getValue().category().equals(category)
         && entry.getValue().targetId().equals(targetId));
+  }
+
+  private static String patchText(Map<String, JsonNode> fields, String key, String old) {
+    JsonNode value = fields.get(key);
+    if (value == null) return old;
+    if (value.isNull()) return null;
+    if (!value.isTextual()) throw new IllegalArgumentException("省字段必须为字符串: " + key);
+    return value.textValue();
   }
 }

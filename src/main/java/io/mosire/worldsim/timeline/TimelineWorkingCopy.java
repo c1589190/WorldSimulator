@@ -89,6 +89,19 @@ public final class TimelineWorkingCopy {
     return currentState;
   }
 
+  synchronized StaticWorldState appendAll(List<? extends WorldChange> changes) {
+    requireOpen();
+    List<WorldChange> copy = List.copyOf(changes);
+    try {
+      StaticWorldState candidate = new WorldChangeSet(copy).apply(currentState);
+      currentState = candidate;
+      pendingChanges.addAll(copy);
+      return candidate;
+    } catch (RuntimeException e) {
+      throw new TimelineException("TIMELINE_CHANGE_APPLY_FAILED", "批量 Change 无法应用到 working copy", e);
+    }
+  }
+
   synchronized void discard() {
     requireOpen();
     pendingChanges.clear();

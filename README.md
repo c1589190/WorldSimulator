@@ -1,134 +1,162 @@
 # WorldSimulator
 
-Agent 导向的世界模拟器/编辑器。当前实现的是 **headless core**：实际 HOI4 社区地图导入的原生 polygon 世界 + 严格节点地址 + SQLite 时间线。
+Agent 导向的世界模拟器/编辑器。当前版本提供原生 polygon 地图、可读文件世界、Simos 风格时间线、GM stdio MCP 和本地只读地图查看器。ORBAT 和 INFO 运行时在后续阶段。
 
-## 当前状态（2026-11-17）
+## 构建
 
-已实现：
-
-- 严格 Simos 风格地址：`treeXXX-tickXXX[/<type>[/<id>...]]`；
-- 原生 `ProvinceShape`（多 polygon part + holes），JTS 校验省形、重叠、显示点、归属和邻接；
-- 静态地图实体：province / state / strategic region / supply hub / adjacency；
-- 有序 `WorldChangeSet`，同一 working copy 的多次写入合并为一个增量；
-- SQLite 时间线：`(branch, tick)` 节点、父子 DAG、ChangeSet JSON、full-state checkpoint；
-- `TimelineService`：genesis、open、apply、discard、save、fork、replay/hash 自检；
-- 同分支只能从 head 推进；历史节点只能 fork；不做原地改写/rebase；
-- SQLite schema `user_version` 门禁与 v0→v1 最小迁移；
-- 合成 300/500 省 benchmark；两个真实 JVM 的写竞争测试；
-- 静态地图实体 resolver：`map/province|state|region|supplyHub`；
-- **Magna Europa Reforged 社区地图导入器**：BMP 省色块 → 原生 polygon/ring/hole/multi-part，state/strategic region/supply hub/railway/special adjacency；
-- 源数据优先：不自动生成缺失的 region/hub/railway；海陆冲突、畸形 state 等修复会写 warning/stats；
-- 最小 CLI 与 JUnit 测试。
-
-尚未实现：ORBAT、INFO、DM/决策人权限、MCP 工具面、WebUI。人类客户端定位为只读查看器。
-
-## 构建与测试
-
-需要 JDK 21、Maven。
+需要 JDK 21、Maven 以及本地 Maven 仓库中的 `io.mosire:agentlib-mosire:0.2.5`。若尚未安装该依赖，先按邻仓 `~/ProjectMosire` 的构建方式安装 AgentLibMosire 及其父 POM。
 
 ```bash
 mvn clean test
 mvn -DskipTests package
 ```
 
-`mvn test` 当前为 72 个测试。
+生成 `target/worldsim-0.1.0-SNAPSHOT.jar`。运行工作目录中的 `world/` 是唯一默认世界入口；不要把启动工作目录和 jar 所在目录混淆。`world/` 和其中的社区地图数据不进入 Git。
 
-## CLI
-
-### 社区地图导入
+## 启动已有世界
 
 ```bash
-# 只下载导入所需文件；raw 资产落在 runtime/imports/**，不进 Git
-tools/fetch-community-map.sh
-
-# Magna Europa Reforged 全量导入（欧洲；建议显式给 heap）
-java -Xmx6g -jar target/worldsim-0.1.0-SNAPSHOT.jar import-hoi4 \
-  --source runtime/imports/MagnaEuropa \
-  --db runtime/worlds/magna-europa.db --reset
-
-# 回放/地址查询
-java -Xmx6g -jar target/worldsim-0.1.0-SNAPSHOT.jar verify \
-  --db runtime/worlds/magna-europa.db
-java -Xmx6g -jar target/worldsim-0.1.0-SNAPSHOT.jar resolve \
-  --db runtime/worlds/magna-europa.db --address main-0/map/province/1
-java -Xmx6g -jar target/worldsim-0.1.0-SNAPSHOT.jar resolve \
-  --db runtime/worlds/magna-europa.db --address main-0/map/supplyHub/supply-249
+cd /home/cna/WorldSimulator
+# 无参数启动 GM stdio MCP；stdout 是协议流，stderr 用于诊断
+java -Xmx5g -jar target/worldsim-0.1.0-SNAPSHOT.jar
 ```
 
-全量 Magna Europa 实测：`21670` used provinces、`2986` states、`253` regions、`65196` adjacencies、`674` supply hubs、`1921` railways、`27504` EntityLinks、`8` repaired polygons、`3` heightmap 推断 sea。详见导入报告。
+服务读取当前目录的 `world/world.json`，持有 `world/session.lock` 并加载校验世界。一个世界只能由一个进程持锁；另一个进程会收到 `WORLD_IN_USE`。stdin 关闭时服务退出并释放锁。没有存档时返回明确错误；不会静默生成世界。
 
-### 核心 demo / benchmark
+`world/` 是文件存档。无需 SQLite 文件即可启动、保存或回放；项目仍包含 SQLite 驱动，用来显式读取旧库迁移，当前没有使用 SQLite 索引。
+
+## 将旧世界迁入 world/
+
+把旧 SQLite 世界及其一致的 WAL 状态放入 `world/imports/`，再执行迁移。下面用 Python SQLite 的在线备份复制本仓的旧库；原库保留：
 
 ```bash
-# 完整 demo：genesis -> 两次写入合并 -> discard -> save -> 历史节点 fork -> 回放校验
-java -jar target/worldsim-0.1.0-SNAPSHOT.jar demo --db runtime/demo.db --reset
-
-# 查看分支/节点
-java -jar target/worldsim-0.1.0-SNAPSHOT.jar tree --db runtime/demo.db
-
-# 合成 300 省（20×15）polygon 世界，测量生成/校验/保存/回放
-java -jar target/worldsim-0.1.0-SNAPSHOT.jar benchmark \
-  --db runtime/benchmark.db --reset --columns 20 --rows 15
-
-# 严格地址解析到稳定实体 id
-java -jar target/worldsim-0.1.0-SNAPSHOT.jar resolve \
-  --db runtime/demo.db --address main-2/map/province/east
-
-# 回放某个节点（checkpoint + delta）并校验
-java -jar target/worldsim-0.1.0-SNAPSHOT.jar replay --db runtime/demo.db --node main-2
-
-# 逐节点校验所有分支
-java -jar target/worldsim-0.1.0-SNAPSHOT.jar verify --db runtime/demo.db
+mkdir -p world/imports
+python3 - <<'PYCODE'
+from pathlib import Path
+import sqlite3
+src = Path('runtime/worlds/magna-europa.db').resolve()
+dst = Path('world/imports/legacy.db').resolve()
+if dst.exists():
+    raise SystemExit('目标已存在，保留原文件')
+with sqlite3.connect(src.as_uri() + '?mode=ro', uri=True) as old:
+    with sqlite3.connect(dst) as new:
+        old.backup(new)
+PYCODE
+java -Xmx5g -jar target/worldsim-0.1.0-SNAPSHOT.jar migrate-sqlite \
+  --source world/imports/legacy.db
 ```
 
-## 时间线语义
+迁移只接受 `world/imports/` 内的源文件；保留源库，验证父链、增量、检查点和原状态哈希；`world.json` 已存在时拒绝覆盖。迁移报告写入 `world/migration-report.json`。迁移完成后正常启动不会再读源库或重新转换地图。
+
+也可以将 HOI4 社区地图源准备在 `world/imports/` 后直接创建新世界：
+
+```bash
+tools/fetch-community-map.sh world/imports/MagnaEuropa
+java -Xmx5g -jar target/worldsim-0.1.0-SNAPSHOT.jar init-hoi4 \
+  --source world/imports/MagnaEuropa
+```
+
+该命令也拒绝覆盖已有世界。Magna Europa 原始资产与派生世界的公开分发许可尚需确认，当前只用于本地世界。
+
+## 世界文件与查看
 
 ```text
-main-0  genesis / full checkpoint
-main-1  delta from main-0
-main-2  delta from main-1
-tree2-2 fork from main-1; delta from main-1, independent from main-2
+world/
+  world.json                     # 已提交的分支入口和格式版本
+  session.lock                   # 进程持有的文件锁
+  imports/                       # 显式初始化/迁移输入；运行时不读取
+  migration-report.json          # 迁移时的来源与拓扑报告
+  provenance.json                # 可选来源/推断提示，关联源节点及哈希
+  data/<generation>/
+    timeline/<branch>/<node>/    # node.json + changes.json
+    snapshots/<id>/snapshot.json # checkpoint 清单
+    objects/<category>/<hash>.json  # 可读、按内容哈希共享的分块
+  view/current.json              # 当前可读视图的节点、hash 和目录
+  view/versions/<id>/map/        # 省属性、几何、州、区域、铁路等 JSON 分块
+  exports/<id>/                  # 导出的独立世界目录
 ```
 
-- 节点身份是 `(branch, tick)`，不引入 revision 作为节点版本；
-- 同一个 working copy 内的写入按顺序进入同一个 ChangeSet；
-- `discard` 只丢弃内存，不写库；
-- `save` 前校验完整静态状态并计算 content hash；
-- 只有已保存节点能作为父节点；同分支父节点必须是 head；
-- 历史节点不能原地推进，只能从该节点 fork 新分支；
-- 回放从最近祖先 checkpoint 开始应用 delta，并逐节点校验 content hash。
+`world.json` 是提交入口。保存先写入新的不可变对象和节点，最后原子切换入口；重启时只认入口可达的节点。节点坐标是 `(branch, tick)`，旧节点只能 fork，未保存草稿只在内存。创世 checkpoint 是世界恢复基线，清单引用的 checkpoint 必须保留；备份时应在服务停止后保留完整世界目录。`view/` 可删除或重建，不是第二份世界真值；通过 `view/current.json` 找到其实际目录和对应节点。
 
-默认 checkpoint 策略：创世、每个分支首节点、以及分支第 N 个节点（`TimelineService` 默认 N=16；CLI demo 用 N=2）。
+以下命令在服务未持锁时使用，默认都操作当前目录下的 `world/`：
 
-SQLite schema 当前为 v1；新库自动写 `PRAGMA user_version=1`，更高版本会拒绝打开，v0 空库/旧开发库做最小迁移。
-
-## 代码入口
-
-```text
-src/main/java/io/mosire/worldsim/address/   strict NodeAddress
-src/main/java/io/mosire/worldsim/map/       polygon map + JTS validation
-src/main/java/io/mosire/worldsim/state/     static state + WorldChangeSet
-src/main/java/io/mosire/worldsim/timeline/  SQLite store + TimelineService + working copy
-src/main/java/io/mosire/worldsim/importer/  HOI4 community-map BMP/state/region importer
-src/main/java/io/mosire/worldsim/cli/       sample/synthetic world + headless CLI
-tools/fetch-community-map.sh                sparse download of Magna Europa source files
-src/test/java/                               JUnit 5 tests
+```bash
+java -Xmx5g -jar target/worldsim-0.1.0-SNAPSHOT.jar verify
+java -Xmx5g -jar target/worldsim-0.1.0-SNAPSHOT.jar tree
+java -Xmx5g -jar target/worldsim-0.1.0-SNAPSHOT.jar resolve \
+  --address main-0/map/province/1
+java -Xmx5g -jar target/worldsim-0.1.0-SNAPSHOT.jar view --node main-0
+java -Xmx5g -jar target/worldsim-0.1.0-SNAPSHOT.jar export
 ```
 
-## 文档
+`export` 将已提交节点、可达对象及可选来源报告导出到 `world/exports/<id>/`；该目录可复制为另一个运行目录的 `world/`。导出不包含未提交临时文件、源文件和派生视图。当前对已有世界的修改通过 MCP Command 形成新节点；把离线修改过的视图导入成新节点尚未实现，直接更改已保存对象会导致完整性检查失败。
 
-- 当前状态：[`docs/agents/STATUS.md`](docs/agents/STATUS.md)
-- 用户设计原稿：[`docs/superpowers/specs/2026-11-17-worldsim-architecture-design-source.md`](docs/superpowers/specs/2026-11-17-worldsim-architecture-design-source.md)
-- 地图 + ORBAT + INFO + 时间线设计：[`docs/superpowers/specs/2026-11-17-map-orbat-info-timeline-design.md`](docs/superpowers/specs/2026-11-17-map-orbat-info-timeline-design.md)
-- 文档入口：[`docs/README.md`](docs/README.md)
-- 实现计划：[`docs/superpowers/plans/2026-11-17-headless-core.md`](docs/superpowers/plans/2026-11-17-headless-core.md)
-- 硬化证据：[`docs/superpowers/reports/2026-11-17-headless-core-hardening-report.md`](docs/superpowers/reports/2026-11-17-headless-core-hardening-report.md)
-- 社区地图导入计划：[`docs/superpowers/plans/2026-11-17-community-map-import.md`](docs/superpowers/plans/2026-11-17-community-map-import.md)
-- 社区地图导入证据：[`docs/superpowers/reports/2026-11-17-magna-europa-import-report.md`](docs/superpowers/reports/2026-11-17-magna-europa-import-report.md)
-- Mappa Mundi 历史导入证据：[`docs/superpowers/reports/2026-11-17-mappa-mundi-import-report.md`](docs/superpowers/reports/2026-11-17-mappa-mundi-import-report.md)
+## 打开地图查看器
+
+在包含 `world/` 的工作目录运行：
+
+```bash
+java -Xmx5g -jar target/worldsim-0.1.0-SNAPSHOT.jar viewer
+```
+
+在 Windows 或 WSL 浏览器打开 `http://127.0.0.1:8765/`。拖动平移，滚轮或按钮缩放。点击地图、输入省 ID，或粘贴如 `main-0/map/province/1644` 的完整地址可查看省份和来源提示。图层可以按地形、州、战略区域着色，并叠加铁路省链和补给中心。页首选择已保存的时间线节点。默认端口可用 `viewer --port <port>` 调整。
+
+同时使用 Agent 与查看器时，在 MCP 客户端的 jar 参数末尾加 `mcp --viewer-port 8765`，两者共用进程与世界锁。查看器通过页首的**刷新**读取新保存节点。启动地址写到 stderr，MCP 的 stdout 保留协议输出。独立查看与组合启动均使用当前工作目录的 `world/`。
+
+## GM MCP
+
+AgentLib 工具调用经过角色、工具和世界资源授权；调用身份由启动端绑定。当前工具：
+
+- `world_overview`、`world_lookup`、`world_validate`：读世界摘要、实体和地图拓扑；`world_lookup` 默认不返回 polygon 顶点。
+- `timeline_tree`、`timeline_diff`、`timeline_verify`：查看和完整验证已保存时间线。
+- `edit_open`、`edit_apply`、`edit_save`、`edit_discard`：打开内存草稿、批量预览/应用、保存或放弃。
+- `world_view`、`world_export`：重建可读视图，或导出全部已提交分支。
+
+例如，运行在同一 WSL 环境、使用 `mcpServers` 配置格式的客户端可以这样启动服务：
+
+```json
+{
+  "mcpServers": {
+    "worldsim": {
+      "command": "/bin/bash",
+      "args": ["-c", "cd /home/cna/WorldSimulator && exec java -Xmx5g -jar target/worldsim-0.1.0-SNAPSHOT.jar"]
+    }
+  }
+}
+```
+
+路径按实际安装位置调整。MCP 客户端会启动该进程；如果已手动启动另一个实例，需要先关闭它以释放世界锁。不同客户端的配置文件位置或格式可能不同。
+
+例如先调用 `world_overview` 获得 `main-0` 的 `stateHash`，再调用：
+
+```json
+{"base":"main-0","expectedHash":"sha256:..."}
+```
+
+将 `edit_open` 返回的 `draftId` 用于 `edit_apply`：
+
+```json
+{
+  "draftId":"<draftId>",
+  "expectedVersion":0,
+  "requestId":"preview-1",
+  "dryRun":true,
+  "commands":[{"op":"patchProvince","id":"1","name":"新名称"}]
+}
+```
+
+`dryRun` 不改变草稿；正式应用后用返回的草稿版本调用 `edit_save`，提供 `draftId`、`expectedVersion`、新的 `requestId`、目标 `tick` 和原 `baseHash`。保存回执随节点原子提交；连接中断后用相同参数和 requestId 可重试。批量命令支持省份局部修改和地图实体增删改，具体字段见工具 JSON Schema。
+
+完整性验证检查每个节点的增量与检查点。历史数据若存在 polygon 与普通邻接不一致会在 `world_validate` 返回；后续编辑不得新增类似不一致，特殊邻接独立处理。
+
+来源报告为附加证据，不替代时间线状态。`world_overview` 显示源信息和几何修复摘要；`world_lookup` 对报告中匹配的省字段返回 source/status/confidence，当后代节点修改该字段后不再沿用旧提示。
+
+## 当前范围
+
+已实现地图导入、原生 polygon、地图实体与地址解析、文件时间线、节点回放、GM MCP、可读地图视图和本地只读查看器。待实现 ORBAT/INFO 领域运行时、DM 权限和补给计算。文件存档的进程中断恢复已做进程级验证，跨平台实际断电行为仍需在目标文件系统测试。
+
+设计及状态见 [`docs/agents/STATUS.md`](docs/agents/STATUS.md) 和 [`docs/superpowers/specs/2026-11-17-map-orbat-info-timeline-design.md`](docs/superpowers/specs/2026-11-17-map-orbat-info-timeline-design.md)。
 
 ## License
 
 本仓代码 MIT，见 [`LICENSE`](LICENSE)。
-
-Magna Europa Reforged raw 资产不在本仓；脚本下载到 gitignored `runtime/imports/**`。该上游仓库当前没有标准 LICENSE，只做本地验证；公开分发导入结果前必须重新确认地图/州数据许可。

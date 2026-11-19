@@ -217,6 +217,30 @@ class TimelineServiceTest {
   }
 
   @Test
+  void verifyAllChecksDeltaEvenWhenNodeHasValidCheckpoint() {
+    var edited = new WorldChangeSet(java.util.List.of(rename(initial, SampleWorld.EAST, "Edited"))).apply(initial);
+    NodeRef target = new NodeRef(new BranchId("main"), 1);
+    store.saveNode(new TimelineNode(target, genesis.ref(), WorldChangeSet.emptyJson(), edited.contentHash(),
+        1_700_000_000_000L, "test"), edited.canonicalJson());
+    assertEquals("Edited", service.load(target).map().provinces().get(SampleWorld.EAST).name());
+    assertCode("TIMELINE_REPLAY_HASH_MISMATCH", () -> service.verifyAll());
+  }
+
+  @Test
+  void savingProvinceShapeCannotLeaveNewStaleAdjacency() {
+    var east = initial.map().provinces().get(SampleWorld.EAST);
+    var shape = io.mosire.worldsim.map.ProvinceShape.of(new io.mosire.worldsim.map.Ring(java.util.List.of(
+        new io.mosire.worldsim.map.Vec2(120, 0), new io.mosire.worldsim.map.Vec2(200, 0),
+        new io.mosire.worldsim.map.Vec2(200, 100), new io.mosire.worldsim.map.Vec2(120, 100))));
+    var moved = new io.mosire.worldsim.map.Province(east.id(), east.name(), east.kind(), east.terrain(),
+        shape, east.displayPoint(), east.stateId(), east.regionId(), east.tags());
+    var work = service.openNext(genesis.ref());
+    service.apply(work, new WorldChange.PutProvince(moved));
+    assertCode("TIMELINE_TOPOLOGY_INVALID", () -> service.save(work, 1, "gm:test"));
+    assertFalse(store.exists(new NodeRef(new BranchId("main"), 1)));
+  }
+
+  @Test
   void staleWorkingCopyCannotOverwriteAdvancedHead() {
     TimelineWorkingCopy first = service.openNext(genesis.ref());
     TimelineWorkingCopy second = service.openNext(genesis.ref());

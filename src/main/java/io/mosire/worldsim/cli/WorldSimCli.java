@@ -34,7 +34,7 @@ public final class WorldSimCli {
   private WorldSimCli() {}
 
   public static void main(String[] args) {
-    int exit = run(args);
+    int exit = WorldDirectoryCli.run(args);
     if (exit != 0) {
       System.exit(exit);
     }

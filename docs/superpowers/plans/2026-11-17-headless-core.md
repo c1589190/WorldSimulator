@@ -3,6 +3,7 @@
 > **状态**：已完成（2026-11-17；验收与残余工程债见 `../reports/2026-11-17-phase1-gap-audit.md`）
 > **日期**：2026-11-17
 > **本文性质**：实现计划（派单责任区）；不是设计正本。
+> **局部取代（2026-11-17）**：文末 State→Region、SupplyHub capacity/range、expected hash 的“残余工程债”描述，已由[阶段审计的修复记录及追加复核](../reports/2026-11-17-phase1-gap-audit.md)取代；当前仍待修复的问题见该报告与 `docs/agents/STATUS.md`。
 > **用户原话（逐字，2026-11-17）**：
 >
 > 「那你先实现一下headless core吧，哦对了你得先初始化git，git@github.com:c1589190/WorldSimulator.git是远程地址」

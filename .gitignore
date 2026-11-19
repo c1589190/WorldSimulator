@@ -21,3 +21,6 @@ Thumbs.db
 # Local logs / temp
 *.log
 *.tmp
+
+# Local world saves and imported assets
+/world/

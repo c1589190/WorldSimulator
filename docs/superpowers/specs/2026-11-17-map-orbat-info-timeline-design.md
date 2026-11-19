@@ -6,6 +6,7 @@
 > **用户设计原稿**：[`2026-11-17-worldsim-architecture-design-source.md`](2026-11-17-worldsim-architecture-design-source.md)  
 > **邻仓/DSH 侦察证据**：[`../reports/2026-11-17-neighbor-projects-recon.md`](../reports/2026-11-17-neighbor-projects-recon.md)  
 > **冲突口径**：用户当次指令 > 用户设计原稿 > 本文；本文中的工程建议若被用户否定，应追加新设计/取代头，不静默改代码。
+> **存储范围补充（2026-11-17）**：§8 的 SQLite 是已交付首阶段方案；用户原稿 §11–12 已裁定 `world/` 启动和 JSON/文本权威存档、SQLite 仅作可重建索引。文件布局/实现细节见本文 §11；实际实现状态以 STATUS 为准。
 
 ---
 
@@ -530,6 +531,8 @@ tree1-360/info/<infoId>
 
 ### 5.3 增量与检查点
 
+> **局部取代（2026-11-17）**：本节及后一个同名小节中“所有 checkpoint 丢失后均可从 delta 重建”不适用于创世基线；文件存储的基线和缺失语义以 §11.7 为准。
+
 ```text
 tree1-0      全量基线 / checkpoint
 tree1-360    相对 tree1-0 的增量
@@ -838,7 +841,7 @@ public interface WorldTool extends AgentTool {
 2. **WSL 部署形态**：WSL 内服务 + Windows 浏览器、WSLg 原生窗口、独立 Windows 原生 viewer。
 3. **ORBAT 模板/初始编成/运行时实例**边界。
 4. **州/战略区域/通用 Area 是否允许重叠**及各自语义。
-5. **静态状态的持久化格式**：SQLite 中 JSON、二进制 geometry、混合。
+5. **原生存档的分块与持久化细节**：JSON/文本主存档与可选可重建 SQLite 索引已由 D-018 确定；快照分块、跨平台恢复及旧 hash 兼容见 §11。
 6. **地图逻辑范围/首版 POC 规模**。
 7. **INFO 多包协议**：namespace/type registry/schema version/formatter/导入导出。
 8. **GM 审计/回执**：GM 可做任何事，但是否需要不可抵赖日志和保存回执。
@@ -859,3 +862,114 @@ public interface WorldTool extends AgentTool {
 - DSH ORBAT 工作台：本会话 `orbat_*` 工具与 `orbat-workbench` skill
 - EarthToHoI4：`~/tmp` 侦察副本或 `https://github.com/EdouardSaladier/EarthToHoI4`
 - HOI4 地图调研：[`../../hoi4-community-map-resources-survey.md`](../../hoi4-community-map-resources-survey.md)（历史输入）
+
+## 11. world 目录与可查看存档：候选设计（2026-11-17）
+
+> **状态**：用户已选择第二种，2026-11-17；首版工程契约见 §11.7–11.8，当前实现与验证见 STATUS。
+> **用户目标/逐字出处**：[用户设计原稿 §11–12](2026-11-17-worldsim-architecture-design-source.md)。JSON/文本是世界真值，SQLite 只可作为可删除重建的派生索引；旧 SQLite 库可供显式迁移读取。
+
+### 11.1 评估结论
+
+在同一世界单写进程下，SQLite 不是必需条件。它仍提供事务、恢复和索引能力；排除多进程写竞争不会自动消除进程中断、跨文件半写或多 MCP 调用并发。
+
+| 候选 | 世界正文 | 时间线/提交依据 | SQLite 职责 | 取舍 |
+|---|---|---|---|---|
+| 全文件 | JSON、Markdown、原始附件 | 不可变节点/增量 + 根清单 | 无 | 可查看、可离线搬运；要自行实现文件提交与恢复 |
+| **文件为主 + 可选索引（当前推荐）** | 同上 | 同上 | 可删重建的查询/全文/空间候选索引 | 按需加速；去掉缓存库不丢世界/历史/幂等依据 |
+| JSON 正文 + SQL 时间线 | JSON/文本对象 | SQL 中的节点、head、回执 | 存档必需部分 | 可复用现有事务；仍要处理外部文件与数据库提交的顺序，复制存档时 SQL 不能遗漏 |
+
+用户已选择第二种（D-018）；不声称文件方案天然更快或 SQLite 只适合多实例。
+
+### 11.2 启动与单实例
+
+建议流程：
+
+1. 固定解析当前运行工作目录的 `world/`，而非 jar 文件所在目录；普通启动不扫描其他世界、不回退到本机游戏数据。
+2. 不存在时返回明确缺失信息和初始化说明；存在但不完整/版本不支持时报告具体错误，不静默新建世界覆盖。
+3. 通过 `FileChannel.tryLock` 持有 `world/session.lock` 的独占锁，锁住后才能加载和服务；锁持续到进程结束。同一世界第二个进程拒绝启动，其他工作目录的独立世界互不影响。
+4. 验证格式版本和已提交清单，恢复最近 checkpoint + delta，建立内存索引后再开放 MCP。
+
+锁文件存在不代表有活进程；是否能取得 OS 锁才是判据。该锁只协调遵守协议的程序，进程内仍需对工作副本及提交队列同步。
+
+正常启动加载原生存档。HOI4 转换、旧 SQLite 导出应是显式初始化/迁移步骤；正常启动不会重新跑栅格转 polygon。
+
+### 11.3 候选目录与数据所有权
+
+下列只是用于讨论的布局，文件名/分块粒度尚未冻结：
+
+```text
+world/
+  world.json                   # 格式、世界 ID、已提交分支 head；最终发布入口
+  session.lock                 # 存活期间持有 OS 锁
+  snapshots/<snapshot-id>/     # 创世或 checkpoint，按领域分块的完整状态
+    map/*.json
+    orbat/*.json
+    units/*.json
+    info/<namespace>/*.json
+  objects/geometry/*.json       # 原生 polygon；可按内容哈希共享
+  objects/text/*.md             # INFO 等条目的长文本；版本化并校验哈希
+  timeline/<branch>/<tick>/
+    node.json                  # 父节点、状态 hash、文件引用、提交回执
+    changes.json               # 有序领域增量
+  view/                        # 指定节点的完整可读视图，标明节点/hash，可重建
+  .staging/                    # 未发布的候选提交
+  cache/index.sqlite           # 可选、可删除的派生索引
+```
+
+- 地图、ORBAT、单位、INFO 分别拥有自己的结构化字段，同一节点清单组合各模块，不为各模块分别创建时间线。
+- JSON 按可读方式排版，hash 按版本化的规范内容计算，不直接哈希漂亮排版文本。
+- 省形按块/对象共享；单位、ORBAT 按稳定实体/文档分组；不要求每个 tick 复制整图，也不预设每省必须一个小文件。
+- INFO 元数据和 typed payload 用 JSON；长文本可内嵌或引用本世界内版本化 Markdown。引用的正文参与节点状态的完整性校验，不能因为正文在单独文件里就绕过时间线。此处不强制引入 DocsMosire。
+- 仅有基线 + JSON 增量不等于能直接看当前军队状态，所以提供 `view/`：选定节点的完整单位、编制、INFO 表示。它是派生浏览产物，带 node/hash，不是第二份可独立写入的世界真值；重建时也需防止混合显示两个节点。
+- 实体 ID 与磁盘路径分别管理；稳定 ID/NodeAddress 不能不经路由/编码就拼成文件路径。
+
+### 11.4 文件保存、回执与恢复
+
+核心是“写新文件，最后发布一个清单”，而不是原地依次覆盖地图/军队/INFO 文件：
+
+1. 从 saved node 打开内存工作副本；多次 Command 按顺序形成同一 ChangeSet。批量先在临时状态验证，通过后替换草稿。
+2. save 时检查基础节点/hash 和目标分支 head，在 `.staging/` 准备增量、必要对象、可选 checkpoint 及回执；旧节点及其引用内容保持不可变。
+3. 完成写入、文件/目录同步与校验，再将不可变提交内容发布到正式位置；最终通过同文件系统的原子操作切换 `world.json` 中已提交分支入口。该入口是唯一提交可见点。
+4. 重启只接受入口可达且完整的节点；未发布临时文件、未被入口引用的孤立包不算 saved，后续清理/隔离。提交回执包含 requestId 与请求摘要，随该节点一起发布；重复请求可从已提交数据重建结果。
+5. 保存后更新内存与可读视图/缓存。视图或索引失败不撤销已提交世界节点，下次可重建。
+
+只做逐文件 rename 不能保证多个文件共同提交。`ATOMIC_MOVE` 的支持与目标覆盖语义依文件系统/provider 而异；数据与目录项持久化也需单独处理。具体持久化协议、备份入口、失败恢复及不支持原子操作时的行为，必须先设计、再在目标 WSL 文件系统实测；本轮不宣称已具备断电安全。
+
+### 11.5 查看、离线修改与 SQL 范围
+
+- 可直接查看 JSON/文本；如要把离线手改应用到现有世界，应作为显式导入/Command 落入新节点或分支，不能自动改写已保存历史。首个原生存档初始化与已有历史的离线修改需要区分。
+- `cache/index.sqlite` 只保存按 node/hash 区分的索引、定位和统计。删缓存库后仍可加载、验证、保存、回放、重建幂等回执；不能把只有 SQL 才有的 head/回执等事实伪装成缓存。
+- 正文在文件、SQL 存权威提交记录也是可行替代，但需采用“文件先完整落地，数据库事务最后引用”的恢复协议，并回收孤立对象；SQL 事务不会自动包住普通文件写入。
+- MCP 面继续调用应用服务和 TimelineStore，不直接决定底层文件格式；若服务共享给多个 Agent，应复用持锁进程，避免每个客户端都启动独占同一世界的服务进程。
+
+### 11.6 实现顺序与验收
+
+建议先冻结 WorldDirectory/清单/文件提交契约，复用现有 `TimelineStore` 抽象新增文件存储实现；旧 SQLite 保留为迁移输入/历史实现，不直接改写现有数据库。
+
+之后实现目录启动与锁 → 文件存储/版本化 → 当前 SQLite 世界导出到新原生格式 → 应用服务/MCP；几何邻接和完整 delta 验证两项已知缺口仍需回归。
+
+必须验证：正常保存/放弃/分叉/全链回放；同一 world 第二进程拒绝；不同 world 可独立运行；提交各阶段强制终止后恢复；回执重试；删除整个 cache 后结果一致；正文缺失/改坏、清单不完整、未知格式版本均具名失败；旧库迁移语义一致且保留原库。文件碎片数、启动/保存耗时、峰值内存须用真实地图测量。
+
+**状态说明**：本节最初比较 SQL 覆盖范围的未定状态已被原稿 §12 / D-018 取代；代码及验证实时结果见 STATUS。离线初始编辑工作流等具体能力仍按实际实现说明。
+
+### 11.7 首版实现契约（2026-11-17）
+
+- 正常 jar 无参数启动时只打开 `./world/`，校验已提交世界与锁，然后通过 AgentLib 提供 GM-only stdio MCP；显式迁移命令只读取放在 `world/imports/` 的旧库。旧库必须保留，正常启动不会自动迁移或扫描它。
+- `world.json` 为唯一已提交清单，包含格式版本、worldId、每个分支 head 的不可变节点文件标识，以及派生 checkpoint 索引；只沿 head 父链可达的节点视作已提交。节点物理文件名使用编码/唯一标识，实体 ID 不直接成为不可信相对路径。
+- 每个节点的元信息与有序 ChangeSet 作为可读 JSON 写入新目录；必要快照按地图实体类别分块，polygon 几何对象按内容哈希共享；世界状态 hash 仍基于原有规范完整状态，迁移保持既有节点坐标、父链、ChangeSet 与 hash。
+- 创世节点的全量快照是恢复基线、属于权威存档；创世增量为空，因此不能删除该基线后仅靠增量恢复。非创世 checkpoint 的状态原则上可由基线与增量重放，但当前被清单引用的 checkpoint 缺失会报错，尚无自动重建命令；两者都不是可随意删除的 SQLite 派生索引。此条局部取代 §5.3 中对所有 checkpoint 可删除重建的表述。
+- 文件与目录必须先完整写入并持久化，再以同一文件系统原子替换 `world.json` 发布；不支持必需原子操作/持久化的平台返回具名错误，不降级成部分提交。发布前失败产生不可达对象/节点，不改变 head；发布后已保存节点可正常重放。
+- MCP 草稿在内存，带草稿版本；批量命令先在临时状态验证，`dryRun` 不改变草稿；save 以基础节点/hash、目标 tick 和 requestId 幂等提交，回执是已提交节点的一部分而非索引独有。单进程内对草稿/保存加锁。
+- 读取可选缓存与生成可读视图均是派生过程，不得成为世界提交所必需的第二真值；每份视图记录来源节点与 hash。旧库迁移在世界目录内的临时位置构建验证，最后发布世界入口，保留原库。
+- 完整验证逐节点从父状态应用增量并检查结果与 checkpoint/hash；普通邻接以原生 polygon 共享边界为依据，特殊邻接单独处理。迁移保留旧节点/哈希；对源地图中已存在的拓扑差异显式报告，后续保存不得引入新的不一致，不能为迎合严格检查静默改写源数据。恢复严格一致的编辑须显式预览并形成新 ChangeSet。
+- 初始化导入时记录被高度图推断为海、被 GeometryFixer 修复的省 ID，与来源、`status` 和未知 `confidence` 一并写入可查看的 `provenance.json`；它作为关联节点/hash 的来源证据而非状态第二真值。查询对应省时返回仍适用的证据；后代节点修改对应字段后不沿用旧提示。导出可携带此报告；旧数据缺少个别 ID 时显式 unknown，不补造。
+
+### 11.8 GM stdio 工具与工作副本契约
+
+- `world_overview`、`world_lookup`、`world_validate`、`timeline_tree`、`timeline_diff`、`timeline_verify` 查询已保存状态；树和差异摘要分页，单省默认不携带 polygon 顶点。`world_view` 重建指定节点的派生文件，`world_export` 导出已提交的所有分支及可达对象、可选来源报告。
+- `edit_open` 必填 base/expectedHash，可选 forkBranch；`edit_apply` 必填 draftId/expectedVersion/requestId/commands，可选 dryRun；`edit_save` 必填 draftId/expectedVersion/requestId/tick/baseHash；`edit_discard` 关闭草稿。调用者身份由 AgentLib 上下文绑定，GM 角色和 world 资源判定在调用入口强制。
+- `WorldCommand` 将意图规划为 `WorldChange`；`patchProvince` 只保存明确字段，`rebuildAdjacencies` 根据 polygon 重算普通邻接并保留特殊邻接。批量在临时状态验证，失败不改变草稿；同草稿相同版本与命令的预览可作为正式应用的缓存，草稿改变后必须失效。
+- 已保存请求的 `(actor, requestId, requestHash, node)` 随节点文件和根清单同次发布；重复完全相同的请求返回原回执，参数不同返回冲突。草稿请求幂等和草稿版本只存在于进程内，不是时间线节点 revision。
+- 文件导出仅遍历已提交 head 可达的节点、检查点和对象，不包含残留的未提交数据。可选来源报告不是世界第二真值，仅在引用节点/hash 有效且目标节点继承该字段时显示；修改对应字段后不继续显示旧证据。
+
+技术参考：[SQLite 原子提交](https://sqlite.org/atomiccommit.html)、[Java 21 Files.move](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/nio/file/Files.html#move(java.nio.file.Path,java.nio.file.Path,java.nio.file.CopyOption...))、[Java FileLock](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/nio/channels/FileLock.html)、[FileChannel.force/tryLock](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/nio/channels/FileChannel.html)。

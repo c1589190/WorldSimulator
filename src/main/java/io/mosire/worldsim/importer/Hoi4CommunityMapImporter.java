@@ -211,7 +211,8 @@ public final class Hoi4CommunityMapImporter {
         polygons.repaired(),
         kinds.inferredSeaProvinces(),
         warnings.size());
-    return new ImportResult(state, stats, List.copyOf(warnings));
+    return new ImportResult(state, stats, List.copyOf(warnings), kinds.inferredSeaProvinceIds(),
+        polygons.repairedProvinceIds());
   }
 
   private static void assignFallbacks(Set<Integer> usedProvinceIds, String[] kinds,
@@ -522,7 +523,7 @@ public final class Hoi4CommunityMapImporter {
     }
     if (!Files.isRegularFile(heightmapFile)) {
       warnings.add("缺少 map/heightmap.bmp，跳过海陆类型修复");
-      return new ProvinceKinds(kinds, 0);
+      return new ProvinceKinds(kinds, List.of());
     }
     Bmp8Reader.Raster heightmap;
     try {
@@ -542,18 +543,18 @@ public final class Hoi4CommunityMapImporter {
         waterPixels[provinceIds[i]]++;
       }
     }
-    int inferred = 0;
+    List<Integer> inferred = new ArrayList<>();
     for (int id : used) {
       if (kinds[id].equals("land") && pixelCounts[id] > 0
           && waterPixels[id] * 2 >= pixelCounts[id]) {
         kinds[id] = "sea";
-        inferred++;
+        inferred.add(id);
       }
     }
-    if (inferred > 0) {
-      warnings.add("heightmap 推断 " + inferred + " 个 definition=land 省为 sea");
+    if (!inferred.isEmpty()) {
+      warnings.add("heightmap 推断 " + inferred.size() + " 个 definition=land 省为 sea");
     }
-    return new ProvinceKinds(kinds, inferred);
+    return new ProvinceKinds(kinds, List.copyOf(inferred));
   }
 
   private static ParsedMapData parseStates(Path directory, Set<Integer> used, String[] kinds,
@@ -838,11 +839,14 @@ public final class Hoi4CommunityMapImporter {
     return message.toString();
   }
 
-  public record ImportResult(StaticWorldState state, ImportStats stats, List<String> warnings) {
+  public record ImportResult(StaticWorldState state, ImportStats stats, List<String> warnings,
+      List<Integer> inferredSeaProvinceIds, List<Integer> repairedPolygonProvinceIds) {
     public ImportResult {
       Objects.requireNonNull(state, "state");
       Objects.requireNonNull(stats, "stats");
       warnings = List.copyOf(warnings);
+      inferredSeaProvinceIds = List.copyOf(inferredSeaProvinceIds);
+      repairedPolygonProvinceIds = List.copyOf(repairedPolygonProvinceIds);
     }
   }
 
@@ -862,7 +866,9 @@ public final class Hoi4CommunityMapImporter {
       int inferredSeaProvinces,
       int warnings) {}
 
-  private record ProvinceKinds(String[] kinds, int inferredSeaProvinces) {}
+  private record ProvinceKinds(String[] kinds, List<Integer> inferredSeaProvinceIds) {
+    int inferredSeaProvinces() { return inferredSeaProvinceIds.size(); }
+  }
 
   private record Definition(int id, int rgb, String type, String terrain) {}
 

@@ -40,6 +40,11 @@ public record NodeAddress(NodeRef node, List<String> path) {
         throw new AddressException("ADDRESS_SEGMENT_DOT", "节点地址的路径段不得为 '.' / '..': " + segment);
       }
     }
+    int fullLength = node.label().length();
+    for (String segment : path) fullLength += 1 + segment.length();
+    if (fullLength > MAX_LENGTH) {
+      throw new AddressException("ADDRESS_TOO_LONG", "节点地址过长（上限 " + MAX_LENGTH + "）: " + fullLength);
+    }
   }
 
   public static NodeAddress parse(String text) {

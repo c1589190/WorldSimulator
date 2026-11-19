@@ -65,6 +65,7 @@ public final class SqliteTimelineStore implements TimelineStore {
       """;
 
   private final Connection connection;
+  private final boolean readOnly;
   private boolean initialized;
   private boolean closed;
 
@@ -81,17 +82,43 @@ public final class SqliteTimelineStore implements TimelineStore {
       throw new TimelineException("TIMELINE_STORE_OPEN_FAILED", "无法创建 SQLite 目录: " + absolute, e);
     }
     this.connection = open("jdbc:sqlite:" + absolute);
+    this.readOnly = false;
     initializeOnConstruction();
   }
 
-  private SqliteTimelineStore(Connection connection) {
+  private SqliteTimelineStore(Connection connection, boolean readOnly) {
     this.connection = connection;
+    this.readOnly = readOnly;
     initializeOnConstruction();
   }
 
   /** 测试/短生命周期场景使用的内存库；单连接生命周期内有效。 */
   public static SqliteTimelineStore inMemory() {
-    return new SqliteTimelineStore(open("jdbc:sqlite::memory:"));
+    return new SqliteTimelineStore(open("jdbc:sqlite::memory:"), false);
+  }
+
+  /** Migration reads the original database without changing its schema or journal mode. */
+  public static SqliteTimelineStore readOnly(Path databaseFile) {
+    Path absolute = Objects.requireNonNull(databaseFile, "databaseFile").toAbsolutePath().normalize();
+    if (!Files.isRegularFile(absolute)) {
+      throw new TimelineException("TIMELINE_STORE_OPEN_FAILED", "SQLite 源文件不存在: " + absolute);
+    }
+    Connection connection = null;
+    try {
+      connection = DriverManager.getConnection("jdbc:sqlite:" + absolute.toUri().toASCIIString() + "?mode=ro");
+      try (Statement statement = connection.createStatement()) {
+        statement.execute("PRAGMA foreign_keys = ON");
+        statement.execute("PRAGMA busy_timeout = 5000");
+        statement.execute("PRAGMA query_only = ON");
+        statement.execute("BEGIN"); // Keep all migration reads on one consistent SQLite snapshot.
+      }
+      return new SqliteTimelineStore(connection, true);
+    } catch (SQLException e) {
+      if (connection != null) {
+        try { connection.close(); } catch (SQLException suppressed) { e.addSuppressed(suppressed); }
+      }
+      throw new TimelineException("TIMELINE_STORE_OPEN_FAILED", "无法只读打开 SQLite: " + absolute, e);
+    }
   }
 
   private static Connection open(String jdbcUrl) {
@@ -134,6 +161,9 @@ public final class SqliteTimelineStore implements TimelineStore {
           "数据库 schema 版本过新: found=" + version + " supported=" + SCHEMA_VERSION);
     }
     if (version < SCHEMA_VERSION) {
+      if (readOnly) {
+        throw new TimelineException("TIMELINE_SCHEMA_MIGRATION_REQUIRED", "只读源库需要先升级 schema: " + version);
+      }
       // 首版迁移策略：v0 空库/旧开发库 → 建立 v1 表并抬版本。
       transaction(c -> {
         try (Statement statement = c.createStatement()) {

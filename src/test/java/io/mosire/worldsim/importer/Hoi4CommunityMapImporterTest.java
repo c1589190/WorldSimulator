@@ -8,6 +8,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -97,6 +98,7 @@ class Hoi4CommunityMapImporterTest {
     assertEquals(1, map.supplyHubs().size());
     assertEquals("sea", map.adjacencies().get(0).kind());
     assertEquals(1, result.stats().inferredSeaProvinces());
+    assertEquals(List.of(2), result.inferredSeaProvinceIds());
     assertTrue(WorldMapValidator.validate(map).isEmpty());
     assertTrue(result.warnings().stream()
         .anyMatch(warning -> warning.contains("heightmap 推断 1")));

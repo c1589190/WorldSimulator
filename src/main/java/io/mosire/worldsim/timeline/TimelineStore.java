@@ -40,10 +40,25 @@ public interface TimelineStore extends AutoCloseable {
    */
   void saveNode(TimelineNode node, String checkpointStateJson);
 
+  /** Commit the idempotency receipt in the same publication as the node. */
+  default void saveNode(TimelineNode node, String checkpointStateJson, CommitReceipt receipt) {
+    if (receipt != null) {
+      throw new TimelineException("TIMELINE_RECEIPT_UNSUPPORTED", "此存储不支持原子提交回执");
+    }
+    saveNode(node, checkpointStateJson);
+  }
+
+  default Optional<CommitReceipt> receipt(String actor, String requestId) {
+    return Optional.empty();
+  }
+
   /** 为已保存节点生成/覆盖派生 checkpoint。 */
   void saveCheckpoint(NodeRef ref, String checkpointStateJson);
 
   Optional<String> checkpoint(NodeRef ref);
+
+  /** Re-read persisted metadata where applicable before a full verification. */
+  default void verifyStorageIntegrity() {}
 
   @Override
   void close();
