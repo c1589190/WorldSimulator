@@ -1,13 +1,13 @@
 # STATUS.md —— 当前状态
 
-> **更新时间**：2026-11-19 22:56 CST
+> **更新时间**：2026-11-19 23:18 CST
 > **当前目标**：接入外部地理参考并通过程序工具建立可玩的 1936 欧洲剧本，再推进 Agent 回合。
-> **当前阶段**：欧洲主图已配准，1936 德波边界、师级序列和归属调试已验收。其他开局资料和 Agent 回合待实施。入口为[首片计划](../superpowers/plans/2026-11-19-1936-geography-pilot.md)、[推演契约](../superpowers/specs/2026-11-19-1936-europe-agent-turns.md)和[史料查证记录](../superpowers/reports/2026-11-19-1936-source-research.md)。编制窗口基线为 `7fba0fc`。
+> **当前阶段**：欧洲主图已配准，1936 德波开局和归属调试已验收并推送 `fbab9d3`。整州、战略区点选通过验收，河流接入路径已核查。入口为[查看器专题](../superpowers/specs/2026-11-19-readonly-map-viewer.md)、[推演契约](../superpowers/specs/2026-11-19-1936-europe-agent-turns.md)和[史料查证记录](../superpowers/reports/2026-11-19-1936-source-research.md)。
 > **责任区与设计**：[地图单位与 ORBAT 契约](../superpowers/specs/2026-11-19-unit-address-and-orbat-format.md)、[实施计划](../superpowers/plans/2026-11-19-country-orbat-pilot.md)、[地理定位与国家调查](../superpowers/reports/2026-11-19-geography-country-orbat-recon.md)。
 
 ## 源码基线与有效入口
 
-- 仓库 `~/WorldSimulator`，单模块 Maven 工程，JDK 21。交付分支为 `main`，1936 阶段以 `7fba0fc` 为基线。当前提交与同步状态见 `git log -1 --oneline` 和 `git status --short --branch`。
+- 仓库 `~/WorldSimulator`，单模块 Maven 工程，JDK 21。交付分支为 `main`，州与战略区阶段以 `fbab9d3` 为基线。当前提交与同步状态见 `git log -1 --oneline` 和 `git status --short --branch`。
 - 交付范围为文件存档、迁移、GM MCP 及查看器的代码、测试与文档。打包产物是 `target/worldsim-0.1.0-SNAPSHOT.jar`。`world/` 是 gitignored 本地用户数据，旧 `runtime/worlds/magna-europa.db` 保留。
 - 用户设计原稿：`docs/superpowers/specs/2026-11-17-worldsim-architecture-design-source.md`；专题设计：`docs/superpowers/specs/2026-11-17-map-orbat-info-timeline-design.md`；裁定索引：`docs/superpowers/DESIGN_RULINGS.md`。
 - 项目维护入口：`docs/AGENTS.md`、`docs/agents/MAINTENANCE_RULINGS.md`；构建和启动步骤见根 `README.md`。
@@ -26,7 +26,7 @@
 - `world_territory_gaps` 与「归属调试」用同一节点的归属查找待补陆省。参考带史料范围时按预期省和国家筛选；工具可用 `scope=all` 查看全图。网页的高亮和清单可用于旧节点对照。[调试契约](../superpowers/specs/2026-11-19-1936-europe-agent-turns.md#7-边界复核归属调试与师级序列)
 - 保存前检查普通邻接是否对应 polygon，并禁止引入新的不一致；特殊邻接单独处理。`verifyAll` 重放每个节点自身 delta 并校验 checkpoint，修复旧审计所列两项缺口。入口：`src/main/java/io/mosire/worldsim/map/PolygonTopology.java:53`、`src/main/java/io/mosire/worldsim/timeline/TimelineService.java:138`。
 - `world/provenance.json` 将来源提示与节点/hash 关联，记录来源、推断和几何修复；后代若更改对应字段，查询不再沿用该字段的旧提示。其是附加证据而非第二套状态。入口：`src/main/java/io/mosire/worldsim/app/WorldProvenance.java`。
-- 只读地图查看器可用 `viewer [--port 8765]` 独立启动，或用 `mcp --viewer-port 8765` 与 GM MCP 共用进程。支持省 ID/地址搜索、原始几何点选、可见瓦片、三种着色、铁路/补给中心与已保存节点切换。入口见 `src/main/java/io/mosire/worldsim/app/viewer/WorldViewerServer.java` 和 `src/main/resources/io/mosire/worldsim/viewer/index.html`。
+- 只读地图查看器可用 `viewer [--port 8765]` 独立启动，或用 `mcp --viewer-port 8765` 与 GM MCP 共用进程。地形等图层按省点选，州和战略区按各自成员合并轮廓并整区点选，可用 `state:<id>`、`region:<id>` 定位。入口见 `src/main/java/io/mosire/worldsim/app/viewer/WorldViewerServer.java` 和 `src/main/resources/io/mosire/worldsim/viewer/index.html`。
 - 国家模块保存国家及每省的归属与控制证据。单位模块保存原生 ORBAT 文档、理想版本引用、实际编制和部署，支持 DSH `mil-org` 交换。地名、国家和单位共用 `NodeAddress`，变更仍走 `Command → ChangeSet → TimelineNode`。主要接口为 `src/main/java/io/mosire/worldsim/app/WorldTools.java`。
 - 兵牌放大时在实际部署点附近展开，全图时聚合计数，低于全图 0.9 倍时隐藏。左侧军队面板提供单位名单和编制图入口。独立窗口用卡片和连线展示编制，支持实际与理想切换、折叠、缩放和节点详情。编制图入口见 `src/main/resources/io/mosire/worldsim/viewer/military.js:359`。
 - INFO 任意地址、长短文本及自定义类型的运行时、DM 权限、离线视图更改导入保留为后续工作。
@@ -35,7 +35,7 @@
 
 - 社区地图是欧洲范围的 **Magna Europa: Reforged**，源 `https://github.com/AzurCrystal/Magna-Europa.git`，固定提交 `d7a57759c188a034c49a0e96aceb1702fa76fc74`，HOI4 1.19.* / mod 0.99.6；raw 在 `runtime/imports/MagnaEuropa`。上游根目录无标准 LICENSE，公开分发前仍需确认；下载脚本 `tools/fetch-community-map.sh`。
 - 当前世界为 `world/world.json` 的 `magnaeuropa`，只有 `main-0`，hash `sha256:097b73086f835cd63df788a787c09cd32fd165be896b39b158c85c43139371ff`。21670 省、2986 州、253 战略区域、674 补给中心、1921 铁路、65196 邻接、27504 EntityLinks。
-- 1936 德波当前世界位于 `runtime/scenario-1936/opening/demo/world/`，运行 jar 为 `target/worldsim-scenario-1936-opening.jar`。`de-pl-1936-2` 记录德国 1,428 省、波兰 907 省、但泽自由市 5 省，德国 29 个师、波兰 31 个师及 213 个下属编制节点。可和 `de-pl-1936-1` 比对。[Windows 查看器](http://127.0.0.1:8767/?node=de-pl-1936-2&layer=owner)
+- 1936 德波当前世界位于 `runtime/scenario-1936/opening/demo/world/`，8767 运行 `target/worldsim-area-viewer.jar`。`de-pl-1936-2` 记录德国 1,428 省、波兰 907 省、但泽自由市 5 省，德国 29 个师、波兰 31 个师及 213 个下属编制节点。[Windows 查看器](http://127.0.0.1:8767/?node=de-pl-1936-2&layer=state)
 - 1936 葡萄牙验收世界位于 `runtime/portugal-1936-demo.ncxp4mk5/world/`。`portugal-1936-1` 记录 79 省归属和 Lisboa 的单位 `por-governo`。`portugal-1936-2` 在此基础上补入剧本中的 7 条部署，合计 Lisboa 3 个、Porto 3 个、Coimbra 2 个。实际控制与编制数量保持未知。原 8765 服务仍指向原 `main-0`。[部署来源](https://github.com/AzurCrystal/Magna-Europa/blob/d7a57759c188a034c49a0e96aceb1702fa76fc74/history/units/POR_1936.txt#L40)
 - 演示世界的 `counter-test-1` 从 `main-0` 分叉。Lisboa（19738）有 6 个明确标注的测试单位，显示坐标同为 `(783, 2274)`，来源标记为 `fixture:viewer-counter-zoom`。构造命令见演示目录的 `counter-zoom-test-commands.json`。
 - 演示世界的 `division-test-1` 从 `main-0` 分叉，两个测试装甲师均部署在 Lisboa（19738）的同一显示点。两师各有独立实际编制树，共用一个理想模板。地图只投影两条师级部署实例，团、营、连、排由编制树展示，见 `src/main/java/io/mosire/worldsim/app/WorldQueries.java:139`。测试来源为 `fixture:viewer-division-hierarchy`，构造命令见演示目录的 `division-qa/commands.json`。
@@ -44,6 +44,17 @@
 - 真实地图普通邻接 64387 条，与 polygon 推导的 64387 条一致，特殊邻接 809 条。早期探针只排除 `special-` 前缀，误将 10 条 `kind=special` 计作普通邻接；原始记录核对后已纠正，实际普通拓扑差异为 0。迁移报告 `world/migration-report.json`、证据 `/tmp/worldsim-border-probe.log`。
 
 ## 最近验证
+
+### 2026-11-19 州与战略区域点选
+
+证据位于 `runtime/scenario-1936/areas/`。河流数据预检和接入做法见[查看器专题](../superpowers/specs/2026-11-19-readonly-map-viewer.md#河流接入方案)。
+
+| 项目 | 工具或方式 | 结果与证据 |
+|---|---|---|
+| 全量构建 | 隔离目录 `mvn -o clean verify` | **PASS**，94 tests / 0 failures / 0 errors / 0 skipped。额外断言覆盖合并省界、保留洞、图层点选和独立 key。见 `verify-build.log`。 |
+| Magna 查看器 | `node runtime/scenario-1936/areas/verify-browser.cjs 8768` | **PASS**，点不同成员得到同一 `state:508`，切换另一个州和 Masovia `region:44`，按 key 查询并回到省份点选。首次合并加出图约 3.3、4.2 秒，缓存后重试切换约 61、53 毫秒。见 `verify-browser.log`、`verify-browser-warm.log` 和截图。 |
+| 归属调试回归 | `node runtime/scenario-1936/areas/verify-gaps.cjs 8768` | **PASS**，旧节点 192 个待补省，修正节点为 0。列表、翻页和编制图均通过。见 `verify-gaps.log`。 |
+| 演示和 Windows | 8767 Chromium 回归及 `curl.exe -4 --noproxy '*'` 请求两种 `/api/pick` | **PASS**，华沙点位分别命中 3 省的 `state:508` 和 116 省的 `region:44`。阶段前后主世界清单 hash 一致。见 `verify-browser-live.log`、`windows-state.json`、`windows-region.json`。 |
 
 ### 2026-11-19 德波边界、师级序列与归属调试
 

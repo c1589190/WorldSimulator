@@ -35,6 +35,7 @@
 | D-027 | 2026-11-19 | 用户原话 | 1936 剧本与后续推演尽量贴近史实 | [原稿 §20](specs/2026-11-17-worldsim-architecture-design-source.md)、[推演契约](specs/2026-11-19-1936-europe-agent-turns.md) | 有效 |
 | D-028 | 2026-11-19 | 用户原话 | 决策人读取 GM 管理的可见信息并提交决策，GM 统一推演并生成下一回合 | [原稿 §20](specs/2026-11-17-worldsim-architecture-design-source.md)、[推演契约](specs/2026-11-19-1936-europe-agent-turns.md) | 有效，细化后续决策人权限 |
 | D-029 | 2026-11-19 | 用户原话 | 提供调试显示，供人和 Agent 查看及补齐地图缺项 | [推演契约 §7](specs/2026-11-19-1936-europe-agent-turns.md#7-边界复核归属调试与师级序列) | 有效 |
+| D-030 | 2026-11-19 | 用户原话 | 州和战略区按各自成员聚合着色，整区可单独点选并有独立 key | [查看器专题](specs/2026-11-19-readonly-map-viewer.md#州与战略区域点选) | 有效 |
 
 ## 仍待裁定的工程问题
 

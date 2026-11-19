@@ -119,12 +119,7 @@ public final class WorldViewerServer implements AutoCloseable {
       case "/api/map" -> json(exchange, 200, info(app.savedMap(query.get("node"))));
       case "/api/overview", "/api/tile" -> render(exchange, query, path.equals("/api/tile"));
       case "/api/province" -> json(exchange, 200, province(snapshot(query), NodeAddress.parse(required(query, "address"))));
-      case "/api/entity" -> {
-        SavedMap saved = snapshot(query);
-        var address = NodeAddress.parse(required(query, "address"));
-        if (!address.node().equals(saved.node())) throw new IllegalArgumentException("实体地址须与当前节点一致");
-        json(exchange, 200, app.lookup(address.canonical(), false));
-      }
+      case "/api/entity" -> json(exchange, 200, entity(snapshot(query), NodeAddress.parse(required(query, "address"))));
       case "/api/search" -> {
         SavedMap saved = snapshot(query);
         json(exchange, 200, app.search(saved.node().label(), required(query, "query"), query.get("kind"),
@@ -145,9 +140,8 @@ public final class WorldViewerServer implements AutoCloseable {
       case "/api/pick" -> {
         SavedMap saved = snapshot(query);
         Vec2 point = new Vec2(coordinate(query, "x"), coordinate(query, "y"));
-        Province picked = frame(saved).pick(point);
-        json(exchange, 200, picked == null ? null : province(saved,
-            new NodeAddress(saved.node(), List.of("map", "province", picked.id()))));
+        var layer = ViewerMap.Layer.parse(query.getOrDefault("layer", "terrain"));
+        json(exchange, 200, pick(saved, layer, point));
       }
       case "/api/logistics" -> json(exchange, 200, logistics(snapshot(query).map()));
       default -> error(exchange, 404, "VIEWER_NOT_FOUND", "查看器路径不存在");
@@ -175,6 +169,36 @@ public final class WorldViewerServer implements AutoCloseable {
         Map.entry("countries", saved.state().countries().countries().size()),
         Map.entry("units", saved.state().formations().units().size()),
         Map.entry("geographicReference", app.hasGeographicReference()));
+  }
+
+  private Map<String, Object> pick(SavedMap saved, ViewerMap.Layer layer, Vec2 point) {
+    Province picked = frame(saved).pick(point);
+    if (picked == null) return null;
+    if (layer.grouped()) {
+      String areaId = layer.areaId(picked);
+      if (areaId == null) return null;
+      String kind = layer == ViewerMap.Layer.STATE ? "state" : "region";
+      return entity(saved, new NodeAddress(saved.node(), List.of("map", kind, areaId)));
+    }
+    return province(saved, new NodeAddress(saved.node(), List.of("map", "province", picked.id())));
+  }
+
+  private Map<String, Object> entity(SavedMap saved, NodeAddress address) {
+    if (!address.node().equals(saved.node())) throw new IllegalArgumentException("实体地址须与当前节点一致");
+    var result = app.lookup(address.canonical(), false);
+    var layer = switch ((String) result.get("kind")) {
+      case "state" -> ViewerMap.Layer.STATE;
+      case "region" -> ViewerMap.Layer.REGION;
+      default -> null;
+    };
+    if (layer != null) {
+      var area = frame(saved).area(layer, address.path().getLast());
+      if (area != null) {
+        result.put("shape", area.shape());
+        result.put("point", area.point());
+      }
+    }
+    return result;
   }
 
   private Map<String, Object> province(SavedMap saved, NodeAddress address) {

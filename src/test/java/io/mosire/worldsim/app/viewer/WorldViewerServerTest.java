@@ -61,7 +61,23 @@ class WorldViewerServerTest {
         assertTrue(json(http, base + "/api/pick" + query + "&x=20&y=20").isNull());
         assertEquals("province:west", json(http, base + "/api/pick" + query + "&x=50&y=50").path("stableId").asText());
         assertEquals("province:east", json(http, base + "/api/pick" + query + "&x=100&y=50").path("stableId").asText());
+        assertEquals(400, get(http, base + "/api/pick" + query + "&layer=missing&x=50&y=50").statusCode());
         assertEquals(400, get(http, base + "/api/pick" + query + "&x=NaN&y=50").statusCode());
+        for (String layer : List.of("state", "region")) {
+          String kindId = layer.equals("state") ? SampleWorld.STATE : SampleWorld.REGION;
+          String picking = base + "/api/pick" + query + "&layer=" + layer;
+          var west = json(http, picking + "&x=50&y=50");
+          assertEquals(west, json(http, picking + "&x=150&y=50"));
+          assertEquals(layer + ":" + kindId, west.path("stableId").asText());
+          assertEquals("main-0/map/" + layer + "/" + kindId, west.path("address").asText());
+          assertEquals(1, west.path("shape").path("parts").size());
+          assertEquals(1, west.path("shape").path("parts").get(0).path("holes").size());
+          assertEquals(west, json(http, base + "/api/entity" + query + "&address=" + west.path("address").asText()));
+          assertTrue(json(http, picking + "&x=20&y=20").isNull());
+          var aggregate = png(http, base + "/api/overview" + query + "&layer=" + layer);
+          assertEquals(aggregate.getRGB(512, 512), aggregate.getRGB(1024, 512), "州或战略区内的省界已合并");
+          assertNotEquals(aggregate.getRGB(512, 512), aggregate.getRGB(205, 205), "合并后保留洞");
+        }
         var logistics = json(http, base + "/api/logistics" + query);
         assertEquals("depot-west", logistics.path("hubs").get(0).path("id").asText());
         assertEquals(2, logistics.path("railways").get(0).path("points").size());

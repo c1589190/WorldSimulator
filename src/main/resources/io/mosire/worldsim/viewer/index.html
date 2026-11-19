@@ -37,7 +37,7 @@
     <section id="viewport" class="viewport" aria-label="世界地图">
       <canvas id="map" tabindex="0" aria-label="世界地图"
         aria-describedby="map-help">请使用支持 Canvas 的浏览器查看地图。</canvas>
-      <p id="map-help" class="visually-hidden">拖动平移，滚轮缩放。点击省份或兵牌查看详情。放大可展开叠牌，缩小至最低倍率时隐藏兵牌。也可使用方向键、加减键和 Home 键。</p>
+      <p id="map-help" class="visually-hidden">拖动平移，滚轮缩放。点击地图查看当前图层的省份、州或战略区域，也可点选兵牌。放大可展开叠牌，缩小至最低倍率时隐藏兵牌。也可使用方向键、加减键和 Home 键。</p>
       <p id="map-status" class="map-status" role="status">正在加载地图…</p>
       <p id="map-counts" class="map-counts" hidden></p>
       <p id="unit-zoom-note" class="unit-zoom-note" role="status" hidden>放大地图可显示兵牌</p>
@@ -72,7 +72,7 @@
       <section class="pane province-pane" aria-labelledby="province-heading">
         <h2 id="province-heading">查找</h2>
         <form id="search" role="search">
-          <label class="visually-hidden" for="province-query">名称、实体地址或经纬度</label>
+          <label class="visually-hidden" for="province-query">名称、区域 Key、实体地址或经纬度</label>
           <input id="province-query" maxlength="512" type="search" placeholder="名称、实体 ID 或节点地址"
             autocomplete="off" spellcheck="false" required>
           <button type="submit" class="primary">定位</button>
@@ -116,6 +116,7 @@
             <button id="clear-entity" type="button" class="quiet">取消选中</button>
           </div>
           <h3 id="entity-name"></h3>
+          <p id="entity-key" class="entity-address" hidden></p>
           <p id="entity-address" class="entity-address"></p>
           <div id="entity-content"></div>
         </article>

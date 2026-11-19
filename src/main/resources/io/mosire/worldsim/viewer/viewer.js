@@ -22,9 +22,11 @@ const terrainNames = {
 const kindNames = { land: '陆地', sea: '海域', lake: '湖泊' };
 const entityNames = { province: '省份', state: '州', region: '战略区域', country: '国家',
   unit: '单位', orbatDocument: '编制文档', orbatNode: '编制节点' };
+const areaLayers = new Set(['state', 'region']);
 const number = new Intl.NumberFormat('zh-CN');
 const timeline = new Map();
 const tileLimit = 96;
+const renderVersion = 2;
 const minimumMapZoom = .8;
 
 let view;
@@ -125,7 +127,7 @@ async function loadMap(node) {
     view = { info, overview: new Map(), tiles: new Map(), requests: new AbortController() };
     $('geo-border-option').hidden = !info.geographicReference;
     $('geo-border-source').hidden = true;
-    queryInput.placeholder = info.geographicReference ? '地名、地址或经度,纬度' : '名称、实体 ID 或节点地址';
+    queryInput.placeholder = info.geographicReference ? '地名、Key、地址或经度,纬度' : '名称、ID、Key 或节点地址';
     const location = new URL(window.location.href);
     if (node || location.searchParams.has('node')) {
       location.searchParams.set('node', info.node);
@@ -278,7 +280,7 @@ function draw() {
   if (!view) return;
 
   const { info, overview } = view;
-  const base = image(overview, layer, url('/api/overview', { ...version(view), layer }));
+  const base = image(overview, layer, url('/api/overview', { ...version(view), layer, renderVersion }));
   if (base.state !== 'ready') {
     if (!mapRequest) status(base.state === 'failed' ? '底图加载失败，可刷新重试。' : '正在绘制底图…');
     return;
@@ -321,7 +323,7 @@ function drawTiles() {
   for (let y = firstY; y < lastY; y++) {
     for (let x = firstX; x < lastX; x++) {
       const key = [layer, level, x, y].join('/');
-      const tile = image(tiles, key, url('/api/tile', { ...version(view), layer, level, x, y }));
+      const tile = image(tiles, key, url('/api/tile', { ...version(view), layer, level, x, y, renderVersion }));
       if (tile.state === 'ready') context.drawImage(tile.picture, x * step, y * step, step, step);
     }
   }
@@ -464,6 +466,38 @@ function drawUnits(relativeZoom) {
   drawUnitCounters(context, unitHits, armyState?.selected || noUnitSelection);
 }
 
+function selectShape(shape, point) {
+  const path = new Path2D();
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const part of shape.parts) {
+    for (const ring of [part.outer, ...part.holes]) {
+      path.moveTo(ring.points[0].x, ring.points[0].y);
+      for (let index = 0; index < ring.points.length; index++) {
+        const vertex = ring.points[index];
+        if (index > 0) path.lineTo(vertex.x, vertex.y);
+        minX = Math.min(minX, vertex.x);
+        minY = Math.min(minY, vertex.y);
+        maxX = Math.max(maxX, vertex.x);
+        maxY = Math.max(maxY, vertex.y);
+      }
+      path.closePath();
+    }
+  }
+  selection = { path, width: maxX - minX, height: maxY - minY,
+    point: point || { x: (minX + maxX) / 2, y: (minY + maxY) / 2 } };
+}
+
+function fitSelection() {
+  const fit = Math.min(width / selection.width, height / selection.height) * .55;
+  scale = between(fit, fitScale(), maxScale());
+  left = width / 2 - selection.point.x * scale;
+  top = height / 2 - selection.point.y * scale;
+  containMap();
+}
+
 function selectProvince(result) {
   $('entity-detail').hidden = true;
   $('province').hidden = !result;
@@ -471,26 +505,7 @@ function selectProvince(result) {
   selection = null;
   if (result) {
     const province = result.entity;
-    const path = new Path2D();
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (const part of province.shape.parts) {
-      for (const ring of [part.outer, ...part.holes]) {
-        path.moveTo(ring.points[0].x, ring.points[0].y);
-        for (let index = 0; index < ring.points.length; index++) {
-          const point = ring.points[index];
-          if (index > 0) path.lineTo(point.x, point.y);
-          minX = Math.min(minX, point.x);
-          minY = Math.min(minY, point.y);
-          maxX = Math.max(maxX, point.x);
-          maxY = Math.max(maxY, point.y);
-        }
-        path.closePath();
-      }
-    }
-    selection = { path, width: maxX - minX, height: maxY - minY, point: province.displayPoint };
+    selectShape(province.shape, province.displayPoint);
     $('province-name').textContent = result.displayName;
     $('province-kind').textContent = kindNames[province.kind] || province.kind;
     $('province-id').textContent = province.id;
@@ -651,7 +666,7 @@ async function openEntity(address, center = true, { roster } = {}) {
   if (parts[0] !== view.info.node && !await loadMap(parts[0])) return;
   clearSearchResults();
   if (parts[1] === 'map' && parts[2] === 'province') {
-    await findProvince('/api/province', { address }, center);
+    await findMapEntity('/api/province', { address }, center);
     return;
   }
   const target = view;
@@ -669,7 +684,6 @@ async function openEntity(address, center = true, { roster } = {}) {
   const lookup = (entityAddress) => json('/api/entity', { ...version(target), address: entityAddress }, request.signal);
   try {
     const result = await lookup(address);
-    const content = [];
     if (result.kind === 'unit') {
       const [actual, ideal] = await Promise.all([result.actualAddress, result.idealAddress]
         .map(async (ref) => ref ? (await lookup(ref)).entity : null));
@@ -686,32 +700,42 @@ async function openEntity(address, center = true, { roster } = {}) {
       showFormation(formationDialog, state, evidenceLine);
       return;
     }
-    if (result.kind === 'country') {
-      const control = result.controlledProvinces > 0
-        ? '已记录控制 ' + number.format(result.controlledProvinces) + ' 省' : '控制范围暂无记录';
-      content.push(textElement('p', '已记录归属 ' + number.format(result.ownedProvinces) + ' 省 · ' + control));
-      content.push(evidenceLine(result.entity.evidence));
-      if (result.capitalAddress) content.push(linkButton('定位首都', result.capitalAddress));
-    } else if (result.entity.provinceIds) {
-      const provinceIds = result.entity.provinceIds;
-      content.push(textElement('p', '覆盖 ' + number.format(provinceIds.length) + ' 省'));
-      if (provinceIds.length) {
-        content.push(linkButton('查看成员省 ' + provinceIds[0], target.info.node + '/map/province/' + provinceIds[0]));
-      }
-    }
-    selectProvince(null);
-    $('empty-province').hidden = true;
-    $('entity-detail').hidden = false;
-    $('entity-kind').textContent = entityNames[result.kind] || result.kind;
-    $('entity-name').textContent = result.displayName;
-    $('entity-address').textContent = result.address;
-    $('entity-content').replaceChildren(...content);
-    if (center && result.point) centerMap(result.point, 4);
+    showEntity(result, center);
   } catch (error) {
     if (request.signal.aborted) return;
     if (military) setArmyState({ address, roster, message: '读取编制失败 · ' + error.message });
     else searchStatus(error.message, true);
   }
+}
+
+function showEntity(result, center) {
+  const content = [];
+  if (result.kind === 'country') {
+    const control = result.controlledProvinces > 0
+      ? '已记录控制 ' + number.format(result.controlledProvinces) + ' 省' : '控制范围暂无记录';
+    content.push(textElement('p', '已记录归属 ' + number.format(result.ownedProvinces) + ' 省 · ' + control));
+    content.push(evidenceLine(result.entity.evidence));
+    if (result.capitalAddress) content.push(linkButton('定位首都', result.capitalAddress));
+  } else if (result.entity.provinceIds) {
+    const provinceIds = result.entity.provinceIds;
+    content.push(textElement('p', '覆盖 ' + number.format(provinceIds.length) + ' 省'));
+    if (provinceIds.length) {
+      content.push(linkButton('查看成员省 ' + provinceIds[0], view.info.node + '/map/province/' + provinceIds[0]));
+    }
+  }
+  selectProvince(null);
+  $('empty-province').hidden = true;
+  $('entity-detail').hidden = false;
+  $('entity-kind').textContent = entityNames[result.kind] || result.kind;
+  $('entity-name').textContent = result.displayName;
+  $('entity-key').hidden = !areaLayers.has(result.kind);
+  $('entity-key').textContent = 'Key ' + result.stableId;
+  $('entity-address').textContent = result.address;
+  $('entity-content').replaceChildren(...content);
+  if (result.shape) {
+    selectShape(result.shape);
+    if (center) fitSelection();
+  } else if (center && result.point) centerMap(result.point, 4);
 }
 
 async function searchEntities(query) {
@@ -779,7 +803,7 @@ async function showGeographicResult(result) {
   }
 }
 
-async function findProvince(path, parameters, center = false) {
+async function findMapEntity(path, parameters, center = false) {
   const target = view;
   if (!target || mapRequest) return;
   selectionRequest?.abort();
@@ -790,14 +814,12 @@ async function findProvince(path, parameters, center = false) {
   try {
     const result = await json(path, { ...version(target), ...parameters }, request.signal);
     if (view !== target || request.signal.aborted) return;
-    selectProvince(result);
-    if (!result) searchStatus('此处没有省份。');
-    if (result && center) {
-      const fit = Math.min(width / selection.width, height / selection.height) * .55;
-      scale = between(fit, fitScale(), maxScale());
-      left = width / 2 - selection.point.x * scale;
-      top = height / 2 - selection.point.y * scale;
-      containMap();
+    if (result && result.kind !== 'province') {
+      showEntity(result, center);
+    } else {
+      selectProvince(result);
+      if (!result) searchStatus('此处没有' + (entityNames[parameters.layer] || '省份') + '。');
+      else if (center) fitSelection();
     }
   } catch (error) {
     if (!request.signal.aborted) searchStatus(error.message, true);
@@ -806,6 +828,7 @@ async function findProvince(path, parameters, center = false) {
 
 function showLegend() {
   const items = [];
+  $('empty-province').textContent = '点击地图查看' + (entityNames[layer] || '省份') + '。';
   if (layer === 'terrain') {
     for (const [key, label] of Object.entries(terrainNames)) {
       const entry = document.createElement('li');
@@ -819,8 +842,8 @@ function showLegend() {
     const note = document.createElement('li');
     note.className = 'legend-note';
     note.textContent = {
-      state: '陆地颜色按省份所属的州分组。',
-      region: '颜色按省份所属的战略区域分组。',
+      state: '点击色块选择整州。',
+      region: '点击色块选择整个战略区。',
       owner: '有归属记录的省按国家着色。',
       controller: '有控制记录的省按实际控制方着色。',
       'owner-gaps': '粉色标出待补归属的陆省。'
@@ -915,7 +938,7 @@ canvas.addEventListener('pointerup', (event) => {
     else {
       const location = { x: (point.x - left) / scale, y: (point.y - top) / scale };
       closeMilitary();
-      findProvince('/api/pick', location);
+      findMapEntity('/api/pick', { ...location, layer });
     }
   }
   drag = null;
@@ -952,7 +975,9 @@ $('search').addEventListener('submit', async (event) => {
   const value = queryInput.value.trim();
   if (!value) return;
   const coordinates = /^([+-]?(?:\d+\.?\d*|\.\d+))\s*[,，]\s*([+-]?(?:\d+\.?\d*|\.\d+))$/.exec(value);
+  const areaKey = /^(state|region):([^/\s]+)$/.exec(value);
   if (coordinates) await findCoordinates(coordinates[1], coordinates[2]);
+  else if (areaKey) await openEntity(view.info.node + '/map/' + areaKey[1] + '/' + areaKey[2]);
   else if (value.includes('/')) await openEntity(value);
   else if (/^\d+$/.test(value)) await openEntity(view.info.node + '/map/province/' + value);
   else await searchEntities(value);
@@ -998,6 +1023,12 @@ document.querySelectorAll('input[name="layer"]').forEach((input) => {
     input.checked = true;
   }
   input.addEventListener('change', () => {
+    if (areaLayers.has(layer) || areaLayers.has(input.value)) {
+      selectionRequest?.abort();
+      selectProvince(null);
+      clearSearchResults();
+      searchStatus();
+    }
     layer = input.value;
     const location = new URL(window.location.href);
     location.searchParams.set('layer', layer);
