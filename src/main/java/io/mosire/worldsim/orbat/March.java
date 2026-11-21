@@ -2,6 +2,7 @@ package io.mosire.worldsim.orbat;
 
 import io.mosire.worldsim.address.NodeAddress;
 import io.mosire.worldsim.country.CountryState;
+import io.mosire.worldsim.map.LandEdgeConditions;
 import io.mosire.worldsim.state.Evidence;
 import io.mosire.worldsim.timeline.SimulationTime;
 
@@ -26,7 +27,7 @@ public record March(String startedAt, double speedKmPerHour, Evidence evidence, 
     }
   }
 
-  public record Leg(String from, String to, double distanceKm, long seconds, Conditions conditions) {
+  public record Leg(String from, String to, double distanceKm, long seconds, Conditions conditions, LandEdgeConditions edge) {
     public Leg {
       NodeAddress.requireSegment(from);
       NodeAddress.requireSegment(to);
@@ -36,12 +37,24 @@ public record March(String startedAt, double speedKmPerHour, Evidence evidence, 
     }
 
     public Leg(String from, String to, double distanceKm, long seconds) {
-      this(from, to, distanceKm, seconds, null);
+      this(from, to, distanceKm, seconds, null, null);
+    }
+
+    public Leg(String from, String to, double distanceKm, long seconds, Conditions conditions) {
+      this(from, to, distanceKm, seconds, conditions, null);
     }
   }
 
   public record Progress(String status, int reachedLegs, double fraction, String provinceId) {
     public boolean moving() { return status.equals("moving"); }
+  }
+
+  /** The recorded outcome of trying to complete one scheduled leg. */
+  public record Arrival(String unitId, int legIndex, CountryState.Passage passage) {
+    public Arrival {
+      NodeAddress.requireSegment(unitId);
+      if (legIndex < 0) throw new IllegalArgumentException("抵达路段序号不得为负");
+    }
   }
 
   public March {
@@ -73,6 +86,10 @@ public record March(String startedAt, double speedKmPerHour, Evidence evidence, 
 
   public String arrivalTime() {
     return arrivalTime(startedAt, legs);
+  }
+
+  String arrivalTime(int legIndex) {
+    return arrivalTime(startedAt, legs.subList(0, legIndex + 1));
   }
 
   private static String arrivalTime(String startedAt, List<Leg> legs) {
@@ -111,7 +128,7 @@ public record March(String startedAt, double speedKmPerHour, Evidence evidence, 
   }
 
   March block(int leg, CountryState.Passage passage) {
-    var stop = new Blockage(arrivalTime(startedAt, legs.subList(0, leg + 1)), leg, passage);
+    var stop = new Blockage(arrivalTime(leg), leg, passage);
     return new March(startedAt, speedKmPerHour, evidence, legs, null, stop);
   }
 }

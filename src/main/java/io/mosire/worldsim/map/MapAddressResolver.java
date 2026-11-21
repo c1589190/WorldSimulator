@@ -69,6 +69,12 @@ public final class MapAddressResolver {
         }
         yield new ResolvedEntity("railway", "railway:" + id, id, value);
       }
+      case "feature" -> {
+        String id = requireSingleId(path, address);
+        var value = map.features().get(id);
+        if (value == null) throw notFound("feature", id, address);
+        yield new ResolvedEntity("feature", "feature:" + id, value.name(), value);
+      }
       case "link" -> {
         String key = requireSingleId(path, address);
         EntityLink value = map.entityLinks().get(key);

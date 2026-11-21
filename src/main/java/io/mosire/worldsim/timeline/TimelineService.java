@@ -173,6 +173,7 @@ public final class TimelineService {
       if (checkpoint.isEmpty()) continue;
       state = checkpoint.get();
       requireHash(candidate, hash.apply(state), "checkpoint");
+      requireEventTime(candidate, state);
       if (cache != null) cache.states.put(candidate.ref(), new ReplayCache.Entry(state, false));
       start = index;
       break;
@@ -198,6 +199,7 @@ public final class TimelineService {
             "回放节点 ChangeSet 失败: " + node.ref(), e);
       }
       requireHash(node, hash.apply(state), "replay");
+      requireEventTime(node, state);
       if (cache != null) cache.states.put(node.ref(), new ReplayCache.Entry(state, false));
     }
     if (cache != null) return cache.checked(ref, cache.states.get(ref));
@@ -232,6 +234,7 @@ public final class TimelineService {
             throw new TimelineException("TIMELINE_CHANGESET_APPLY_FAILED", "完整校验无法应用增量: " + node.ref(), e);
           }
           requireHash(node, replayed, "full-replay");
+          requireEventTime(node, replayed);
           requireValidState(replayed);
           var checkpoint = store.checkpointState(node.ref(), null);
           if (checkpoint.isPresent()) {
@@ -355,6 +358,9 @@ public final class TimelineService {
       throw new TimelineException("TIMELINE_WORKING_COPY_CLOSED",
           "working copy 已保存或已放弃: base=" + workingCopy.baseNode().ref());
     }
+    if (workingCopy.baseNode().eventTime() != null) {
+      throw new TimelineException("EVENT_TIMELINE_REQUIRED", "请用事件模式继续该节点");
+    }
     if (targetTick < 0) {
       throw new TimelineException("TIMELINE_TICK_INVALID", "目标 tick 必须 >= 0: " + targetTick);
     }
@@ -364,19 +370,7 @@ public final class TimelineService {
               + " parent=" + workingCopy.baseNode().ref());
     }
 
-    BranchId targetBranch = workingCopy.targetBranch();
-    if (workingCopy.kind() == TimelineWorkingCopy.Kind.ADVANCE) {
-      NodeRef head = store.head(targetBranch)
-          .orElseThrow(() -> new TimelineException("TIMELINE_STORE_CORRUPT",
-              "推进分支无 head: " + targetBranch));
-      if (!head.equals(workingCopy.baseNode().ref())) {
-        throw new TimelineException("TIMELINE_FORK_REQUIRED",
-            "分支 head 已变化，不能从旧节点推进；请 fork: base="
-                + workingCopy.baseNode().ref() + " head=" + head);
-      }
-    } else if (store.branches().contains(targetBranch)) {
-      throw new TimelineException("TIMELINE_BRANCH_EXISTS", "fork 目标分支已存在: " + targetBranch);
-    }
+    BranchId targetBranch = requireSaveHead(workingCopy);
 
     StaticWorldState state = workingCopy.currentState();
     requireValidState(state);
@@ -403,6 +397,81 @@ public final class TimelineService {
     return node;
   }
 
+  public record SavedEvents(List<TimelineNode> nodes, StaticWorldState state) {}
+
+  public SavedEvents saveEvents(TimelineWorkingCopy copy, List<WorldChangeSet> steps, String savedBy,
+      String expectedContentHash, String requestId, String requestHash) {
+    requireSavedBy(savedBy);
+    requireExpectedContentHash(copy.baseNode(), expectedContentHash);
+    if (!copy.isOpen()) throw new TimelineException("TIMELINE_WORKING_COPY_CLOSED", "working copy 已关闭");
+    if (steps.isEmpty() || copy.pendingChangeCount() != 0) {
+      throw new TimelineException("EVENT_STEPS_REQUIRED", "事件草稿需要至少一个已预览的时刻");
+    }
+    BranchId branch = requireSaveHead(copy);
+    var writes = new ArrayList<TimelineStore.NodeWrite>();
+    var state = copy.baseState();
+    NodeRef parent = copy.baseNode().ref();
+    String previousEvent = copy.baseNode().eventTime();
+    long savedAt = System.currentTimeMillis();
+    int nodeNumber = store.nodes(branch).size();
+    Function<StaticWorldState, String> hash = state.contentHasher();
+    for (WorldChangeSet step : steps) {
+      var before = state;
+      state = step.apply(before);
+      String time = validateEvent(before, state, step);
+      if (previousEvent != null && time.compareTo(previousEvent) <= 0) {
+        throw new TimelineException("EVENT_TIME_ALREADY_COMMITTED", "事件时刻须晚于父节点");
+      }
+      NodeRef ref;
+      try {
+        ref = new NodeRef(branch, Math.incrementExact(parent.tick()));
+      } catch (ArithmeticException e) {
+        throw new TimelineException("TIMELINE_TICK_INVALID", "节点序号超出范围", e);
+      }
+      if (before.map() != state.map()) hash = state.contentHasher();
+      var node = new TimelineNode(ref, parent, step.canonicalJson(), hash.apply(state), savedAt, savedBy, time);
+      nodeNumber++;
+      boolean checkpoint = nodeNumber == 1 || nodeNumber % checkpointEvery == 0;
+      writes.add(new TimelineStore.NodeWrite(node, checkpoint ? state.canonicalJson() : null));
+      parent = ref;
+      previousEvent = time;
+    }
+    var nodes = writes.stream().map(TimelineStore.NodeWrite::node).toList();
+    var receipt = new CommitReceipt(savedBy, requestId, requestHash, parent, nodes.stream().map(TimelineNode::ref).toList());
+    store.saveNodes(writes, receipt);
+    copy.markSaved(parent);
+    rememberSavedState(nodes.getLast(), state);
+    return new SavedEvents(nodes, state);
+  }
+
+  public static String validateEvent(StaticWorldState before, StaticWorldState after, WorldChangeSet changes) {
+    var event = changes.event();
+    if (event == null || !event.time().equals(after.simulationTime())) {
+      throw new TimelineException("EVENT_TIME_INVALID", "事件时刻与结算状态不一致");
+    }
+    if (before.map() != after.map()) {
+      requireValidMap(after.map());
+      requireNoNewTopologyIssues(before, after, changes.changes());
+    }
+    requireValidDomains(after);
+    return event.time();
+  }
+
+  private BranchId requireSaveHead(TimelineWorkingCopy copy) {
+    BranchId targetBranch = copy.targetBranch();
+    if (copy.kind() == TimelineWorkingCopy.Kind.ADVANCE) {
+      NodeRef head = store.head(targetBranch)
+          .orElseThrow(() -> new TimelineException("TIMELINE_STORE_CORRUPT", "推进分支无 head: " + targetBranch));
+      if (!head.equals(copy.baseNode().ref())) {
+        throw new TimelineException("TIMELINE_FORK_REQUIRED",
+            "分支 head 已变化，不能从旧节点推进；请 fork: base=" + copy.baseNode().ref() + " head=" + head);
+      }
+    } else if (store.branches().contains(targetBranch)) {
+      throw new TimelineException("TIMELINE_BRANCH_EXISTS", "fork 目标分支已存在: " + targetBranch);
+    }
+    return targetBranch;
+  }
+
   private synchronized void rememberSavedState(TimelineNode node, StaticWorldState state) {
     if (cachedReplay.states.isEmpty()) return;
     cachedReplay.mapFor(state).validated = true;
@@ -423,8 +492,10 @@ public final class TimelineService {
             "节点未保存或不存在: " + ref));
   }
 
-  private StaticWorldState preparedState(TimelineNode base, StaticWorldState state) {
+  private synchronized StaticWorldState preparedState(TimelineNode base, StaticWorldState state) {
     if (state == null) return load(base.ref());
+    var cached = cachedReplay.states.get(base.ref());
+    if (cached != null && cached.state() == state) return cachedReplay.checked(base.ref(), cached);
     requireHash(base, state, "prepared-state");
     requireValidState(state);
     return state;
@@ -454,6 +525,15 @@ public final class TimelineService {
   private static void requireValidDomains(StaticWorldState state) {
     try {
       state.countries().validate(state.map());
+      state.civics().validate(state.map(), state.countries());
+      var countryIds = state.countries().countries().keySet();
+      for (var entry : state.intelligence().entries().values()) {
+        if (!countryIds.containsAll(entry.audience())) throw new IllegalArgumentException("INFO 受众包含未知国家");
+      }
+      for (var turn : state.turns().turns().values()) {
+        if (turn.brief().legacy() && !countryIds.containsAll(turn.brief().ids())) throw new IllegalArgumentException("回合参与者包含未知国家");
+      }
+      if (state.countries().railEconomy() != null) state.countries().railEconomy().validateTime(state.simulationTime());
       state.formations().validate(state.map(), state.countries(), state.simulationTime());
     } catch (IllegalArgumentException e) {
       throw new TimelineException("TIMELINE_STATE_INVALID", e.getMessage(), e);
@@ -501,6 +581,12 @@ public final class TimelineService {
 
   private static void requireHash(TimelineNode node, StaticWorldState state, String stage) {
     requireHash(node, state.contentHash(), stage);
+  }
+
+  private static void requireEventTime(TimelineNode node, StaticWorldState state) {
+    if (node.eventTime() != null && !node.eventTime().equals(state.simulationTime())) {
+      throw new TimelineException("EVENT_TIME_INVALID", "节点时刻与状态时钟不一致: " + node.ref());
+    }
   }
 
   private static void requireHash(TimelineNode node, String actual, String stage) {

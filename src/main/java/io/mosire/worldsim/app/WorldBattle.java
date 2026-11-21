@@ -2,9 +2,11 @@ package io.mosire.worldsim.app;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.mosire.worldsim.address.NodeAddress;
+import io.mosire.worldsim.map.LandEdgeConditions;
 import io.mosire.worldsim.map.MapAddressResolver;
 import io.mosire.worldsim.map.Province;
 import io.mosire.worldsim.orbat.Battle;
+import io.mosire.worldsim.orbat.March;
 import io.mosire.worldsim.orbat.OrbatDocument;
 import io.mosire.worldsim.orbat.OrbatState;
 import io.mosire.worldsim.state.Evidence;
@@ -18,6 +20,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 
 final class WorldBattle {
   private WorldBattle() {}
@@ -27,6 +30,31 @@ final class WorldBattle {
   record LossRequest(String unitAddress, String formationAddress, JsonNode personnel, List<EquipmentRequest> equipment) {}
   record EquipmentRequest(String itemId, String name, JsonNode count) {}
   private record Subtree(OrbatDocument document, Set<String> ids) {}
+
+  record Participant(String address, String provinceAddress, String terrain, March.Supply supply, LandEdgeConditions approach) {}
+  record Context(String node, String stateHash, String provinceAddress, String terrain,
+                 List<Participant> attackers, List<Participant> defenders) {}
+
+  static Context context(WorldApplicationService.SavedMap saved, WorldCommand.Context commandContext, String address,
+      List<String> attackers, List<String> defenders) {
+    var province = WorldMovement.landProvince(saved, address);
+    var state = saved.state();
+    var units = new HashMap<String, OrbatState.Unit>();
+    var attackIds = side(state, commandContext, attackers, province.id(), true, units);
+    var defendIds = side(state, commandContext, defenders, province.id(), false, units);
+    var supply = new HashMap<String, LandMarchRules>();
+    var links = commandContext.landLinks().apply(saved);
+    Function<String, Participant> view = id -> {
+      var unit = units.get(id);
+      var home = saved.map().provinces().get(unit.provinceId());
+      var rules = supply.computeIfAbsent(unit.countryId(), country -> new LandMarchRules(state, country));
+      return new Participant(WorldQueries.address(saved.node(), "orbat", "unit", id),
+          WorldQueries.address(saved.node(), "map", "province", home.id()), home.terrain(), rules.supply(home.id()),
+          home.id().equals(province.id()) ? null : links.edge(home, province));
+    };
+    return new Context(saved.node().label(), saved.stateHash(), address, province.terrain(),
+        attackIds.stream().map(view).toList(), defendIds.stream().map(view).toList());
+  }
 
   static Battle resolve(StaticWorldState state, WorldCommand.Context context, Request request) {
     if (request == null) throw invalid("需要战斗裁决");

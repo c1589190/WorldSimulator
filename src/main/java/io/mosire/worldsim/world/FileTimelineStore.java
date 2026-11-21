@@ -39,7 +39,7 @@ public final class FileTimelineStore implements TimelineStore {
 
   public record NodeFile(int formatVersion, String branch, long tick, String parentBranch,
       Long parentTick, String parentPath, String changeHash, String stateHash,
-      long savedAtEpochMilli, String savedBy, CommitReceipt receipt) {}
+      long savedAtEpochMilli, String savedBy, CommitReceipt receipt, String eventTime) {}
 
   private record Entry(TimelineNode node, String path, String parentPath, CommitReceipt receipt) {}
 
@@ -167,6 +167,18 @@ public final class FileTimelineStore implements TimelineStore {
     if (genesis().filter(n -> manifest.checkpoints().containsKey(n.ref().label())).isEmpty()) {
       throw new TimelineException("WORLD_CHECKPOINT_MISSING", "创世 checkpoint 缺失");
     }
+    for (CommitReceipt receipt : receipts.values()) {
+      if (receipt.nodes() == null) continue;
+      NodeRef previous = null;
+      for (NodeRef ref : receipt.nodes()) {
+        Entry entry = entries.get(ref);
+        if (entry == null || entry.node().eventTime() == null || !ref.branch().equals(receipt.node().branch())
+            || previous != null && !previous.equals(entry.node().parent())) {
+          throw new TimelineException("WORLD_RECEIPT_INVALID", "回执节点链无效: " + receipt.requestId());
+        }
+        previous = ref;
+      }
+    }
   }
 
   private Entry visit(String path) {
@@ -189,6 +201,7 @@ public final class FileTimelineStore implements TimelineStore {
         if (actualParent == null || !parent.equals(actualParent.node().ref()) || ref.tick() <= parent.tick()) {
           throw new TimelineException("WORLD_NODE_INVALID", "节点父引用不一致: " + ref);
         }
+        requireEventOrder(actualParent.node(), entry.node());
       }
       Entry previous = entries.putIfAbsent(ref, entry);
       if (previous != null && !previous.path().equals(entry.path())) {
@@ -227,8 +240,10 @@ public final class FileTimelineStore implements TimelineStore {
       if (!JsonCodec.sha256(changeText).equals(file.changeHash())) {
         throw new TimelineException("WORLD_CHANGE_HASH_MISMATCH", "节点增量文件 hash 不一致: " + ref);
       }
-      String canonical = WorldChangeSet.fromJson(changeText).canonicalJson();
-      TimelineNode node = new TimelineNode(ref, parent, canonical, file.stateHash(), file.savedAtEpochMilli(), file.savedBy());
+      var changes = WorldChangeSet.fromJson(changeText);
+      TimelineNode node = new TimelineNode(ref, parent, changes.canonicalJson(), file.stateHash(),
+          file.savedAtEpochMilli(), file.savedBy(), file.eventTime());
+      requireEventMetadata(node, changes);
       if (file.receipt() != null && !file.receipt().node().equals(ref)) {
         throw new TimelineException("WORLD_RECEIPT_INVALID", "节点回执指向其他节点: " + ref);
       }
@@ -294,15 +309,65 @@ public final class FileTimelineStore implements TimelineStore {
   }
 
   @Override public synchronized void saveNode(TimelineNode node, String checkpointJson, CommitReceipt receipt) {
+    saveNodes(List.of(new NodeWrite(node, checkpointJson)), receipt);
+  }
+
+  @Override public synchronized void saveNodes(List<NodeWrite> writes, CommitReceipt receipt) {
     ensureOpen();
-    Objects.requireNonNull(node, "node");
-    if (entries.containsKey(node.ref())) throw new TimelineException("TIMELINE_NODE_EXISTS", "节点已存在: " + node.ref());
+    if (writes.isEmpty()) throw new IllegalArgumentException("提交需要至少一个节点");
+    var first = writes.getFirst();
+    TimelineNode head = writes.getLast().node();
     if (receipt != null) {
-      if (!node.ref().equals(receipt.node())) throw new TimelineException("WORLD_RECEIPT_INVALID", "回执节点不一致");
+      if (!head.ref().equals(receipt.node()) || receipt.nodes() != null
+          && !receipt.nodes().equals(writes.stream().map(write -> write.node().ref()).toList())) {
+        throw new TimelineException("WORLD_RECEIPT_INVALID", "回执节点不一致");
+      }
       if (receipts.containsKey(receiptKey(receipt.actor(), receipt.requestId()))) {
         throw new TimelineException("WORLD_REQUEST_EXISTS", "请求号已提交: " + receipt.requestId());
       }
     }
+    Entry parent = requireFirstParent(first.node(), first.checkpointStateJson());
+    TimelineNode previous = parent == null ? null : parent.node();
+    for (NodeWrite write : writes) {
+      TimelineNode node = write.node();
+      if (entries.containsKey(node.ref())) throw new TimelineException("TIMELINE_NODE_EXISTS", "节点已存在: " + node.ref());
+      if (!node.ref().branch().equals(head.ref().branch()) || previous != null
+          && (!previous.ref().equals(node.parent()) || node.ref().tick() <= previous.ref().tick())) {
+        throw new TimelineException("WORLD_NODE_INVALID", "提交节点须组成同分支的连续父链: " + node.ref());
+      }
+      if (previous != null) requireEventOrder(previous, node);
+      if (writes.size() > 1 && node.eventTime() == null) throw new TimelineException("WORLD_NODE_INVALID", "多节点提交需要事件时刻");
+      requireEventMetadata(node, WorldChangeSet.fromJson(node.changeSetJson()));
+      previous = node;
+    }
+
+    var staged = new ArrayList<Entry>();
+    var checkpoints = new TreeMap<>(manifest.checkpoints());
+    for (NodeWrite write : writes) {
+      TimelineNode node = write.node();
+      if (write.checkpointStateJson() != null) {
+        checkpoints.put(node.ref().label(), writeCheckpoint(node, write.checkpointStateJson()));
+      }
+      hook.accept("objects-written");
+      CommitReceipt nodeReceipt = node.ref().equals(head.ref()) ? receipt : null;
+      parent = stageNode(node, parent, nodeReceipt);
+      staged.add(parent);
+    }
+    var heads = new TreeMap<>(manifest.heads());
+    heads.put(head.ref().branch().value(), staged.getLast().path());
+    Manifest next = new Manifest(FORMAT_VERSION, manifest.worldId(), manifest.dataDirectory(), heads, checkpoints);
+    publish(next);
+    manifest = next;
+    for (Entry entry : staged) {
+      entries.put(entry.node().ref(), entry);
+      entriesByPath.put(entry.path(), entry);
+    }
+    if (receipt != null) receipts.put(receiptKey(receipt.actor(), receipt.requestId()), receipt);
+    hook.accept("manifest-published");
+  }
+
+  private Entry requireFirstParent(TimelineNode node, String checkpointJson) {
+    if (entries.containsKey(node.ref())) throw new TimelineException("TIMELINE_NODE_EXISTS", "节点已存在: " + node.ref());
     Entry parent = node.parent() == null ? null : entries.get(node.parent());
     if (node.parent() == null) {
       if (!entries.isEmpty() || node.ref().tick() != 0) throw new TimelineException("TIMELINE_GENESIS_ALREADY_EXISTS", "创世节点无效");
@@ -318,15 +383,23 @@ public final class FileTimelineStore implements TimelineStore {
         throw new TimelineException("TIMELINE_PARENT_BRANCH_EMPTY", "同分支没有 head");
       }
     }
-    String checkpointPath = null;
-    if (checkpointJson != null) {
-      StaticWorldState state = StaticWorldState.fromJson(checkpointJson);
-      if (!state.id().equals(manifest.worldId()) || !state.contentHash().equals(node.stateHash())) {
-        throw new TimelineException("WORLD_CHECKPOINT_HASH_MISMATCH", "checkpoint 与节点/world 不一致: " + node.ref());
-      }
-      checkpointPath = new SnapshotFiles(world, manifest.dataDirectory()).write(state);
+    return parent;
+  }
+
+  private static void requireEventOrder(TimelineNode previous, TimelineNode node) {
+    if (previous.eventTime() != null && (node.eventTime() == null || node.eventTime().compareTo(previous.eventTime()) <= 0)) {
+      throw new TimelineException("WORLD_NODE_INVALID", "事件时刻须晚于父节点: " + node.ref());
     }
-    hook.accept("objects-written");
+  }
+
+  private static void requireEventMetadata(TimelineNode node, WorldChangeSet changes) {
+    var event = changes.event();
+    if (!Objects.equals(node.eventTime(), event == null ? null : event.time())) {
+      throw new TimelineException("WORLD_NODE_INVALID", "节点时刻与增量不一致: " + node.ref());
+    }
+  }
+
+  private Entry stageNode(TimelineNode node, Entry parent, CommitReceipt receipt) {
     String id = UUID.randomUUID().toString();
     String branchName = node.ref().branch().value();
     String branch = branchName.matches("[A-Za-z0-9_-]{1,80}")
@@ -343,38 +416,32 @@ public final class FileTimelineStore implements TimelineStore {
     NodeFile file = new NodeFile(FORMAT_VERSION, node.ref().branch().value(), node.ref().tick(),
         node.parent() == null ? null : node.parent().branch().value(),
         node.parent() == null ? null : node.parent().tick(), parent == null ? null : parent.path(),
-        JsonCodec.sha256(changes), node.stateHash(), node.savedAtEpochMilli(), node.savedBy(), receipt);
+        JsonCodec.sha256(changes), node.stateHash(), node.savedAtEpochMilli(), node.savedBy(), receipt, node.eventTime());
     DurableFiles.writeNew(world.resolve(staging + "/changes.json"), changes);
     DurableFiles.writeNew(world.resolve(staging + "/node.json"), JsonCodec.prettyJson(file));
     DurableFiles.moveAtomic(world.resolve(staging), world.resolve(destination), false);
     hook.accept("node-published");
-    Map<String, String> heads = new TreeMap<>(manifest.heads());
-    heads.put(node.ref().branch().value(), destination);
-    Map<String, String> checkpoints = new TreeMap<>(manifest.checkpoints());
-    if (checkpointPath != null) checkpoints.put(node.ref().label(), checkpointPath);
-    Manifest next = new Manifest(FORMAT_VERSION, manifest.worldId(), manifest.dataDirectory(), heads, checkpoints);
-    publish(next);
-    manifest = next;
-    Entry entry = new Entry(node, destination, parent == null ? null : parent.path(), receipt);
-    entries.put(node.ref(), entry);
-    entriesByPath.put(destination, entry);
-    if (receipt != null) receipts.put(receiptKey(receipt.actor(), receipt.requestId()), receipt);
-    hook.accept("manifest-published");
+    return new Entry(node, destination, parent == null ? null : parent.path(), receipt);
   }
 
   @Override public synchronized void saveCheckpoint(NodeRef ref, String checkpointJson) {
     ensureOpen();
     TimelineNode node = find(ref).orElseThrow(() -> new TimelineException("TIMELINE_NODE_NOT_FOUND", "节点不存在: " + ref));
-    StaticWorldState state = StaticWorldState.fromJson(checkpointJson);
-    if (!state.id().equals(manifest.worldId()) || !state.contentHash().equals(node.stateHash())) {
-      throw new TimelineException("WORLD_CHECKPOINT_HASH_MISMATCH", "checkpoint 与节点不一致: " + ref);
-    }
-    String path = new SnapshotFiles(world, manifest.dataDirectory()).write(state);
+    String path = writeCheckpoint(node, checkpointJson);
     Map<String, String> checkpoints = new TreeMap<>(manifest.checkpoints());
     checkpoints.put(ref.label(), path);
     Manifest next = new Manifest(FORMAT_VERSION, manifest.worldId(), manifest.dataDirectory(), manifest.heads(), checkpoints);
     publish(next);
     manifest = next;
+  }
+
+  private String writeCheckpoint(TimelineNode node, String json) {
+    StaticWorldState state = StaticWorldState.fromJson(json);
+    if (!state.id().equals(manifest.worldId()) || !state.contentHash().equals(node.stateHash())
+        || node.eventTime() != null && !node.eventTime().equals(state.simulationTime())) {
+      throw new TimelineException("WORLD_CHECKPOINT_HASH_MISMATCH", "checkpoint 与节点/world 不一致: " + node.ref());
+    }
+    return new SnapshotFiles(world, manifest.dataDirectory()).write(state);
   }
 
   @Override public synchronized Optional<String> checkpoint(NodeRef ref) {

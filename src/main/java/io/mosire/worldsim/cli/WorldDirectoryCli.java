@@ -37,9 +37,15 @@ public final class WorldDirectoryCli {
       Map<String, String> options = options(args);
       return switch (args[0]) {
         case "mcp" -> {
-          only(options, "--viewer-port");
+          only(options, "--viewer-port", "--decision-turn", "--decision-country", "--decision-maker");
           Integer port = options.containsKey("--viewer-port") ? port(options.get("--viewer-port")) : null;
-          WorldRuntime.run(world, System.in, System.out, port);
+          WorldRuntime.run(world, System.in, System.out, port, options.get("--decision-turn"), options.get("--decision-country"), options.get("--decision-maker"));
+          yield 0;
+        }
+        case "decision-viewer" -> {
+          only(options, "--port", "--decision-turn", "--decision-maker");
+          WorldRuntime.viewDecision(world, port(options.getOrDefault("--port", "8765")),
+              options.get("--decision-turn"), options.get("--decision-maker"));
           yield 0;
         }
         case "viewer" -> {
@@ -209,6 +215,10 @@ public final class WorldDirectoryCli {
     System.out.println("""
         WorldSimulator（工作目录下的 world/）
           无参数 | mcp [--viewer-port <port>]  启动 GM stdio MCP，可同时开启查看器
+          mcp --decision-turn <node/turn/id> --decision-maker <id>
+                                               启动绑定身份的决策 MCP
+          mcp --decision-turn <node/turn/id> --decision-country <id>
+                                               启动旧版国别回合的决策 MCP
           viewer [--port 8765]                启动本地只读地图查看器
           migrate-sqlite [--source world/imports/legacy.db]
           init-hoi4 --source world/imports/<source>

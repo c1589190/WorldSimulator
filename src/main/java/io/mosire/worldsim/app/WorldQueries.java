@@ -3,9 +3,11 @@ package io.mosire.worldsim.app;
 import io.mosire.worldsim.address.AddressException;
 import io.mosire.worldsim.address.NodeAddress;
 import io.mosire.worldsim.address.NodeRef;
+import io.mosire.worldsim.country.CountryState;
 import io.mosire.worldsim.map.Vec2;
 import io.mosire.worldsim.orbat.March;
 import io.mosire.worldsim.orbat.Battle;
+import io.mosire.worldsim.orbat.CommandDepot;
 import io.mosire.worldsim.orbat.OrbatDocument;
 import io.mosire.worldsim.orbat.OrbatState;
 import io.mosire.worldsim.state.StaticWorldState;
@@ -45,8 +47,7 @@ final class WorldQueries {
       return battle(state, node, hash, battle);
     }
     if (path.getFirst().equals("country") && path.size() == 2) {
-      var country = state.countries().countries().get(path.get(1));
-      if (country == null) throw missing(address);
+      var country = country(state, address);
       var result = result(address, hash, "country", "country:" + country.id(), country.name(), country);
       if (country.capitalProvinceId() != null) {
         result.put("capitalAddress", address(node, "map", "province", country.capitalProvinceId()));
@@ -58,6 +59,15 @@ final class WorldQueries {
           .filter(t -> t.controller() != null && t.controller().countryId().equals(country.id())).count());
       var grants = state.countries().transitRights().get(country.id());
       if (grants != null) result.put("transitRightsGranted", grants);
+      var manpower = state.countries().manpower().get(country.id());
+      if (manpower != null) result.put("manpower", manpower);
+      return result;
+    }
+    if (path.size() == 3 && path.getFirst().equals("orbat") && path.get(1).equals("depot")) {
+      var depot = depot(state, address);
+      var result = result(address, hash, "depot", "depot:" + depot.id(), depot.name(), depot);
+      result.put("provinceAddress", address(node, "map", "province", depot.provinceId()));
+      result.put("countryAddress", address(node, "country", depot.countryId()));
       return result;
     }
     if (path.size() == 3 && path.getFirst().equals("orbat") && path.get(1).equals("unit")) {
@@ -102,6 +112,22 @@ final class WorldQueries {
     var unit = state.formations().units().get(path.get(2));
     if (unit == null) throw missing(address);
     return unit;
+  }
+
+  static CountryState.Country country(StaticWorldState state, NodeAddress address) {
+    var path = address.requireEntityPath().path();
+    if (path.size() != 2 || !path.getFirst().equals("country")) throw invalid(address);
+    var country = state.countries().countries().get(path.getLast());
+    if (country == null) throw missing(address);
+    return country;
+  }
+
+  static CommandDepot depot(StaticWorldState state, NodeAddress address) {
+    var path = address.requireEntityPath().path();
+    if (path.size() != 3 || !path.subList(0, 2).equals(List.of("orbat", "depot"))) throw invalid(address);
+    var depot = state.formations().depots().get(path.getLast());
+    if (depot == null) throw missing(address);
+    return depot;
   }
 
   static OrbatDocument.Node formationsNode(OrbatState orbat, OrbatState.Ref reference) {

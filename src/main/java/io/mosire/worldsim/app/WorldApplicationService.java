@@ -4,6 +4,7 @@ import io.mosire.worldsim.address.BranchId;
 import io.mosire.worldsim.address.NodeAddress;
 import io.mosire.worldsim.address.NodeRef;
 import io.mosire.worldsim.country.CountryState;
+import io.mosire.worldsim.info.TurnState;
 import io.mosire.worldsim.json.JsonCodec;
 import io.mosire.worldsim.map.MapAddressResolver;
 import io.mosire.worldsim.map.PolygonTopology;
@@ -52,23 +53,37 @@ public final class WorldApplicationService {
   private record ScenarioCalendar(int formatVersion, List<CalendarAnchor> anchors) {}
   private record Applied(String requestHash, Map<String, Object> result) {}
   private record Preview(long version, String commandHash, StaticWorldState candidate, List<WorldChange> changes) {}
+  private record EventPreview(long version, String commandHash, WorldEventTimeline.Plan plan) {}
   private record GapScope(NodeRef node, boolean referenceOnly) {}
   private record TerritoryGap(String provinceId, String stableId, String address, String name, String stateId,
-                              String stateName, String expectedCountryId) {}
+                              String stateName, String expectedCountryId, String actualCountryId, String issue) {}
   private static final class Draft {
     final String actor;
     final TimelineWorkingCopy copy;
+    final boolean eventTimeline;
     final Map<String, Applied> requests = new HashMap<>();
     long version;
     Preview preview;
-    Draft(String actor, TimelineWorkingCopy copy) { this.actor = actor; this.copy = copy; }
+    WorldEventTimeline.Plan events;
+    EventPreview eventPreview;
+    Draft(String actor, TimelineWorkingCopy copy, boolean eventTimeline) {
+      this.actor = actor;
+      this.copy = copy;
+      this.eventTimeline = eventTimeline;
+    }
   }
 
   private final FileTimelineStore store;
   private final TimelineService timeline;
   private final Map<NodeRef, Clock> clocks = new HashMap<>();
+  private final Map<NodeRef, TurnPosition> turnPositions = new HashMap<>();
+  private record TurnPosition(String id, NodeRef opening, NodeRef resolution) {}
+  private io.mosire.worldsim.country.CivicState censusState;
+  private Map<String, List<io.mosire.worldsim.country.CivicState.Census>> censusByProvince = Map.of();
   private Map<NodeRef, Clock> calendar;
   private WorldGeography geography;
+  private WorldMap linksMap;
+  private LandLinks links;
   private final Map<String, Draft> drafts = new HashMap<>();
   private final LinkedHashMap<NodeRef, WorldSearchIndex> search = new LinkedHashMap<>(4, .75f, true) {
     @Override protected boolean removeEldestEntry(Map.Entry<NodeRef, WorldSearchIndex> e) { return size() > 2; }
@@ -112,11 +127,382 @@ public final class WorldApplicationService {
     return result;
   }
 
+  public synchronized Object population(String label, String date, String basis, String scope) {
+    var address = scope == null ? null : NodeAddress.parse(scope);
+    var saved = savedMap(label == null && address != null ? address.node().label() : label);
+    return WorldCivic.population(saved, date, basis, address);
+  }
+
+  public synchronized Object info(String label) {
+    var saved = savedMap(label);
+    return Map.of("node", saved.node().label(), "stateHash", saved.stateHash(),
+        "entries", WorldTurn.info(saved.state(), saved.node()));
+  }
+
+  public synchronized Object turn(String text) {
+    var address = NodeAddress.parse(text);
+    var state = load(address.node());
+    var turn = state.turns().turns().get(WorldTurn.turnId(address));
+    if (turn == null) throw new TimelineException("ENTITY_NOT_FOUND", "回合不存在");
+    var result = new LinkedHashMap<String, Object>(Map.of("address", address.canonical(), "turn", turn));
+    if (turn.resolution() == null && isTurnOpening(address)) result.put("received", submissions(address));
+    return result;
+  }
+
+  public synchronized Object decisionPanel(SavedMap saved, NodeAddress subject) {
+    if (!subject.node().equals(saved.node())) throw new IllegalArgumentException("对象地址须与当前节点一致");
+    var path = subject.requireEntityPath().path();
+    var kind = String.join("/", path.subList(0, path.size() - 1));
+    var target = new TurnState.Subject(kind, path.getLast());
+    var position = panelTurnPosition(saved);
+    var turn = position == null ? null : saved.state().turns().turns().get(position.id());
+    if (turn == null) {
+      return new WorldPanels.DecisionPanel(saved.node().label(), saved.stateHash(), subject.canonical(),
+          null, null, "no-turn", List.of(), null, subjectName(saved.state(), target));
+    }
+    var opening = new NodeAddress(position.opening(), List.of("turn", position.id()));
+    boolean live = turn.resolution() == null && opening.node().equals(saved.node())
+        && store.head(saved.node().branch()).filter(saved.node()::equals).isPresent();
+    boolean settled = turn.resolution() != null;
+    boolean inboxView = !settled && !turn.proposals().isEmpty();
+    var brief = turn.brief();
+    var decisions = new ArrayList<WorldPanels.Decision>();
+    for (String id : new java.util.TreeSet<>(brief.ids())) {
+      var participant = brief.participant(id);
+      if (!participant.subject().equals(target)) continue;
+      var receipt = live || settled || inboxView && turn.proposals().containsKey(id) ? receipt(opening, brief, id) : null;
+      var proposal = settled || inboxView ? turn.proposals().get(id) : receipt == null ? null : receivedProposal(receipt, brief, id);
+      var targetAddresses = proposal == null ? List.<String>of() :
+          proposal.targets().stream().map(p -> opening.node().label() + "/" + p).toList();
+      var rulings = turn.rulings() == null ? List.<TurnState.Ruling>of() :
+          turn.rulings().stream().filter(item -> id.equals(item.decisionMakerId())).toList();
+      decisions.add(new WorldPanels.Decision(id, participantName(opening.node(), brief, id),
+          settled ? "resolved" : proposal == null ? "pending" : "received",
+          proposal, targetAddresses, receipt == null ? null : receipt.ref().label(),
+          receipt == null ? null : receipt.savedAtEpochMilli(), rulings));
+    }
+    String mode = settled ? "settled" : inboxView ? "receipt" : live ? "receiving" : "historical";
+    String resolved = position.resolution() == null ? null : WorldQueries.address(position.resolution(), "turn", position.id());
+    return new WorldPanels.DecisionPanel(saved.node().label(), saved.stateHash(), subject.canonical(),
+        opening.canonical(), resolved, mode, List.copyOf(decisions), decisions.isEmpty() ? null : turn.resolution(),
+        subjectName(decisions.isEmpty() ? saved.state() : load(opening.node()), target));
+  }
+
+  public synchronized Object roundRulings(SavedMap saved) {
+    var position = panelTurnPosition(saved);
+    if (position == null) return new WorldPanels.RoundRulings(saved.node().label(), saved.stateHash(), null, null, null, List.of());
+    var turn = saved.state().turns().turns().get(position.id());
+    String opening = WorldQueries.address(position.opening(), "turn", position.id());
+    String resolved = position.resolution() == null ? null : WorldQueries.address(position.resolution(), "turn", position.id());
+    var rulings = turn.rulings() == null ? List.<WorldPanels.RoundRuling>of() : turn.rulings().stream().map(ruling -> {
+      var id = ruling.decisionMakerId();
+      if (id == null) return new WorldPanels.RoundRuling(ruling, null, null);
+      var participant = turn.brief().participant(id);
+      return new WorldPanels.RoundRuling(ruling, saved.node().label() + "/" + participant.subject().path(),
+          participantName(position.opening(), turn.brief(), id));
+    }).toList();
+    return new WorldPanels.RoundRulings(saved.node().label(), saved.stateHash(), opening, resolved, turn.resolution(), rulings);
+  }
+
+  private TurnPosition panelTurnPosition(SavedMap saved) {
+    return saved.state().turns().turns().isEmpty() ? null : turnPosition(saved.node());
+  }
+
+  private String participantName(NodeRef opening, TurnState.Brief brief, String id) {
+    var participant = brief.participant(id);
+    return brief.legacy() ? subjectName(load(opening), participant.subject()) : participant.displayName();
+  }
+
+  private static String subjectName(StaticWorldState state, TurnState.Subject subject) {
+    if (subject.kind().equals("country")) {
+      var country = state.countries().countries().get(subject.id());
+      return country == null ? subject.id() : country.name();
+    }
+    if (subject.kind().equals("orbat/command")) {
+      var command = state.formations().commands().get(subject.id());
+      return command == null ? subject.id() : command.name();
+    }
+    var unit = state.formations().units().get(subject.id());
+    return unit == null ? subject.id() : unit.name();
+  }
+
+  private TurnPosition turnPosition(NodeRef ref) {
+    var pending = new ArrayDeque<TimelineNode>();
+    NodeRef cursor = ref;
+    while (cursor != null && !turnPositions.containsKey(cursor)) {
+      var node = requireNode(cursor);
+      pending.push(node);
+      cursor = node.parent();
+    }
+    TurnPosition position = turnPositions.get(cursor);
+    while (!pending.isEmpty()) {
+      var node = pending.pop();
+      for (var change : WorldChangeSet.fromJson(node.changeSetJson()).changes()) {
+        if (change instanceof WorldChange.OpenTurn opened) {
+          position = new TurnPosition(opened.brief().id(), node.ref(), null);
+        } else if (change instanceof WorldChange.ResolveTurn resolved && position != null && position.id().equals(resolved.turnId())) {
+          position = new TurnPosition(position.id(), position.opening(), node.ref());
+        }
+      }
+      turnPositions.put(node.ref(), position);
+    }
+    return position;
+  }
+
+  public synchronized Object provincePopulation(SavedMap saved, NodeAddress address) {
+    var province = panelProvince(saved, address);
+    var civic = saved.state().civics();
+    if (censusState != civic) {
+      censusByProvince = civic.census().values().stream().collect(Collectors.groupingBy(
+          io.mosire.worldsim.country.CivicState.Census::provinceId));
+      censusState = civic;
+    }
+    var stamp = clock(saved.node());
+    String date = stamp == null ? null : stamp.time().substring(0, 10);
+    var records = censusByProvince.getOrDefault(province.id(), List.of()).stream()
+        .filter(record -> date == null || record.date().compareTo(date) <= 0)
+        .sorted(Comparator.comparing(io.mosire.worldsim.country.CivicState.Census::date).reversed()
+            .thenComparing(io.mosire.worldsim.country.CivicState.Census::basis)).toList();
+    return new WorldPanels.Population(saved.node().label(), saved.stateHash(), address.canonical(), records);
+  }
+
+  public synchronized Object provinceLogistics(SavedMap saved, NodeAddress address) {
+    var province = panelProvince(saved, address);
+    var tracks = saved.map().railways().values().stream().filter(railway -> railway.provincePath().contains(province.id()))
+        .map(railway -> {
+          var operation = railway.operation();
+          return new WorldPanels.Track(WorldQueries.address(saved.node(), "map", "railway", railway.id()), railway.id(),
+              railway.level(), operation == null ? "unknown" : operation.status(),
+              operation == null ? null : operation.tonnesPerDay(), operation == null ? null : operation.evidence());
+        }).toList();
+    var hubs = saved.map().supplyHubs().values().stream().filter(hub -> hub.provinceId().equals(province.id()))
+        .map(hub -> new WorldPanels.Hub(WorldQueries.address(saved.node(), "map", "supplyHub", hub.id()), hub)).toList();
+    var borders = new ArrayList<WorldPanels.Border>();
+    if (province.kind().equals("land")) {
+      var network = landLinks(saved);
+      for (String id : network.neighbors(province.id())) {
+        var other = saved.map().provinces().get(id);
+        if (other == null || !other.kind().equals("land")) continue;
+        var edge = network.edge(province, other);
+        borders.add(new WorldPanels.Border(WorldQueries.address(saved.node(), "map", "province", id), other.name(), edge.river()));
+      }
+    }
+    return new WorldPanels.Logistics(saved.node().label(), saved.stateHash(), address.canonical(), tracks, hubs, List.copyOf(borders));
+  }
+
+  private static Province panelProvince(SavedMap saved, NodeAddress address) {
+    var path = address.path();
+    if (!address.node().equals(saved.node()) || path.size() != 3 || !path.subList(0, 2).equals(List.of("map", "province"))) {
+      throw new IllegalArgumentException("请输入当前节点的省份地址");
+    }
+    var province = saved.map().provinces().get(path.getLast());
+    if (province == null) throw new TimelineException("ENTITY_NOT_FOUND", "省份不存在");
+    return province;
+  }
+
+  private boolean isTurnOpening(NodeAddress address) {
+    return WorldChangeSet.fromJson(requireNode(address.node()).changeSetJson()).changes().stream()
+        .anyMatch(change -> change instanceof WorldChange.OpenTurn opened && opened.brief().id().equals(WorldTurn.turnId(address)));
+  }
+
+  private Map<String, TurnState.Proposal> submissions(NodeAddress address) {
+    var turn = load(address.node()).turns().requireOpen(WorldTurn.turnId(address));
+    if (!isTurnOpening(address)) throw new TimelineException("TURN_BASE_REQUIRED", "请选择公布开放回合的节点");
+    var proposals = new TreeMap<String, TurnState.Proposal>();
+    for (String id : turn.brief().ids()) {
+      var receipt = receipt(address, turn.brief(), id);
+      if (receipt != null) proposals.put(id, receivedProposal(receipt, turn.brief(), id));
+    }
+    return Map.copyOf(proposals);
+  }
+
+  private TimelineNode receipt(NodeAddress opening, TurnState.Brief brief, String id) {
+    return store.head(WorldTurn.inbox(opening, id, brief.legacy())).map(ref -> {
+      var node = requireNode(ref);
+      if (!opening.node().equals(node.parent())) throw new TimelineException("TURN_INBOX_INVALID", "收件与开放回合不一致");
+      return node;
+    }).orElse(null);
+  }
+
+  private TurnState.Proposal receivedProposal(TimelineNode receipt, TurnState.Brief brief, String id) {
+    var inbox = load(receipt.ref()).turns().requireOpen(brief.id());
+    var proposal = inbox.proposals().get(id);
+    if (!inbox.brief().equals(brief) || proposal == null) throw new TimelineException("TURN_INBOX_INVALID", "收件与开放回合不一致");
+    return proposal;
+  }
+
+  synchronized WorldTurn.DecisionSession decisionSession(String turnText, String id, boolean legacy) {
+    var address = NodeAddress.parse(turnText);
+    var turn = load(address.node()).turns().requireOpen(WorldTurn.turnId(address));
+    if (!isTurnOpening(address) || turn.brief().legacy() != legacy || turn.brief().participant(id) == null) {
+      throw new TimelineException("DECISION_ACCESS_DENIED", "决策会话需要绑定开放节点及参与身份");
+    }
+    return new WorldTurn.DecisionSession(address, id, legacy, Boolean.TRUE.equals(turn.brief().scoped()));
+  }
+
+  synchronized Object decisionBrief(WorldTurn.DecisionSession session) {
+    var saved = savedMap(session.turn().node().label());
+    var brief = saved.state().turns().requireOpen(WorldTurn.turnId(session.turn())).brief();
+    var participant = brief.participant(session.participantId());
+    var result = new LinkedHashMap<String, Object>(Map.of("turnAddress", session.turn().canonical(),
+        "baseHash", saved.stateHash(),
+        "addresses", participant.readablePaths().stream().map(path -> saved.node().label() + "/" + path).toList(),
+        "entries", WorldTurn.decisionInfo(saved.state(), saved.node(), session)));
+    if (session.legacy()) result.put("countryId", session.participantId());
+    else {
+      result.put("decisionMakerId", session.participantId());
+      result.put("displayName", participant.displayName());
+      result.put("subjectAddress", saved.node().label() + "/" + participant.subject().path());
+      result.put("proposalTargets", participant.proposalTargets().stream().map(path -> saved.node().label() + "/" + path).toList());
+    }
+    if (Boolean.TRUE.equals(brief.scoped())) {
+      var view = new WorldPerspective(saved, participant, session.participantId());
+      result.put("documents", view.documents());
+      result.put("entries", WorldTurn.decisionInfo(saved.state(), saved.node(), session).stream().map(entry ->
+          new WorldTurn.DecisionInfo(entry.address(), entry.subjectAddresses().stream().filter(text -> view.canRead(NodeAddress.parse(text))).toList(),
+              entry.title(), entry.text(), entry.type(), entry.payload(), entry.evidence())).toList());
+    }
+    putClock(result, clock(saved.node()));
+    return result;
+  }
+
+  synchronized Object decisionLookup(WorldTurn.DecisionSession session, String entity) {
+    var saved = savedMap(session.turn().node().label());
+    var brief = saved.state().turns().requireOpen(WorldTurn.turnId(session.turn())).brief();
+    var stamp = clock(saved.node());
+    if (Boolean.TRUE.equals(brief.scoped())) {
+      return new WorldPerspective(saved, brief.participant(session.participantId()), session.participantId())
+          .lookup(NodeAddress.parse(entity), stamp == null ? null : stamp.time());
+    }
+    var address = WorldTurn.readable(NodeAddress.parse(entity), session, brief);
+    return WorldTurn.entity(saved.state(), address, saved.stateHash(), stamp == null ? null : stamp.time());
+  }
+
+  synchronized List<WorldPerspective.Marker> decisionMarkers(WorldTurn.DecisionSession session) {
+    var saved = savedMap(session.turn().node().label());
+    var brief = saved.state().turns().requireOpen(WorldTurn.turnId(session.turn())).brief();
+    if (!Boolean.TRUE.equals(brief.scoped())) throw new TimelineException("DECISION_ACCESS_DENIED", "此回合未启用可见面");
+    return new WorldPerspective(saved, brief.participant(session.participantId()), session.participantId()).markers();
+  }
+
+  synchronized Map<String, Object> decisionSearch(WorldTurn.DecisionSession session, String query, int limit) {
+    requirePage(0, limit);
+    var saved = savedMap(session.turn().node().label());
+    var brief = saved.state().turns().requireOpen(WorldTurn.turnId(session.turn())).brief();
+    var view = new WorldPerspective(saved, brief.participant(session.participantId()), session.participantId());
+    return search.computeIfAbsent(saved.node(), ignored -> new WorldSearchIndex(saved.state())).search(
+        saved.node(), saved.stateHash(), query, null, 0, limit, text -> view.canRead(NodeAddress.parse(text)));
+  }
+
+  public synchronized List<?> mapFeatures(SavedMap saved) {
+    return WorldPerspective.markersForGM(saved);
+  }
+
+  public synchronized List<WorldPerspective.UnitSight> unitPerspective(SavedMap saved, NodeAddress address) {
+    var path = address.path();
+    if (!saved.node().equals(address.node()) || path.size() != 3
+        || !path.subList(0, 2).equals(List.of("orbat", "unit"))) {
+      throw new IllegalArgumentException("请选择当前节点的部署单位地址");
+    }
+    var unitId = path.getLast();
+    if (!saved.state().formations().units().containsKey(unitId)) {
+      throw new TimelineException("ENTITY_NOT_FOUND", "单位不存在：" + unitId);
+    }
+    var position = panelTurnPosition(saved);
+    if (position == null) return List.of();
+    var brief = saved.state().turns().turns().get(position.id()).brief();
+    if (!Boolean.TRUE.equals(brief.scoped())) return List.of();
+    var subject = new TurnState.Subject("orbat/unit", unitId);
+    return brief.ids().stream().sorted().filter(id -> brief.participant(id).subject().equals(subject))
+        .map(id -> new WorldPerspective(saved, brief.participant(id), id).unitSight()).toList();
+  }
+
+  synchronized Object submitDecision(WorldTurn.DecisionSession session, String text, String rationale, List<String> targets,
+                                     List<TurnState.Movement> movements, List<WorldTurn.ContactDraft> contacts) {
+    var opening = session.turn();
+    var base = requireNode(opening.node());
+    var state = load(opening.node());
+    String id = WorldTurn.turnId(opening);
+    var brief = state.turns().requireOpen(id).brief();
+    var current = savedMap(opening.node().label());
+    var proposal = WorldTurn.proposal(session, brief, current, text, rationale, targets, movements, contacts);
+    String participant = session.participantId();
+    var inbox = WorldTurn.inbox(opening, participant, session.legacy());
+    var existing = receipt(opening, brief, participant);
+    if (existing != null) {
+      if (!proposal.equals(receivedProposal(existing, brief, participant))) {
+        throw new TimelineException("DECISION_ALREADY_SUBMITTED", "已收件，原决策须保持一致");
+      }
+      return Map.of("turnAddress", opening.canonical(), "receipt", existing.ref().label(), "replayedReceipt", true);
+    }
+    if (store.head(opening.node().branch()).filter(opening.node()::equals).isEmpty()) {
+      throw new TimelineException("TURN_CLOSED", "正式分支已推进，当前回合停止收件");
+    }
+    var copy = timeline.openFork(opening.node(), inbox, base.stateHash(), state);
+    var change = session.legacy() ? new WorldChange.SubmitDecision(id, participant, proposal)
+        : new WorldChange.SubmitDecision(id, null, proposal, participant);
+    String actor = "dm:" + participant;
+    NodeRef receipt;
+    if (base.eventTime() == null) {
+      timeline.applyAll(copy, List.of(change));
+      receipt = timeline.save(copy, Math.incrementExact(opening.node().tick()), actor, base.stateHash()).ref();
+    } else {
+      String time = SimulationTime.format(java.time.LocalDateTime.parse(base.eventTime()).plusSeconds(1));
+      var plan = WorldEventTimeline.plan(copy, commandContext(base),
+          List.of(new WorldCommand.AdvanceTime(0, time), new WorldCommand.PersistedChange(change)));
+      String hash = JsonCodec.sha256(JsonCodec.canonicalJson(proposal));
+      receipt = timeline.saveEvents(copy, plan.steps(), actor, base.stateHash(), inbox.value(), hash).nodes().getLast().ref();
+    }
+    return Map.of("turnAddress", opening.canonical(), "receipt", receipt.label(), "replayedReceipt", false);
+  }
+
   public synchronized Map<String, Object> lookup(String text, boolean includeGeometry) {
     NodeAddress address = NodeAddress.parse(text);
     StaticWorldState state = load(address.node());
     String hash = requireNode(address.node()).stateHash();
-    if (!address.requireEntityPath().path().getFirst().equals("map")) {
+    var path = address.requireEntityPath().path();
+    if (path.size() == 3 && (path.get(0).equals("info") && Set.of("document", "contact").contains(path.get(1))
+        || path.get(0).equals("orbat") && path.get(1).equals("command"))) {
+      Object item = switch (path.get(1)) {
+        case "document" -> state.intelligence().documents().get(path.getLast());
+        case "contact" -> state.intelligence().contacts().get(path.getLast());
+        default -> state.formations().commands().get(path.getLast());
+      };
+      if (item == null) throw new TimelineException("ENTITY_NOT_FOUND", "实体不存在: " + address.canonical());
+      String title = switch (item) {
+        case io.mosire.worldsim.info.InfoState.Contact contact -> contact.title();
+        case io.mosire.worldsim.info.InfoState.Document document -> document.title();
+        case io.mosire.worldsim.orbat.Headquarters hq -> hq.name();
+        default -> throw new IllegalStateException();
+      };
+      return Map.of("address", address.canonical(), "nodeHash", hash, "kind", path.get(1), "displayName", title, "entity", item);
+    }
+    if (path.size() == 2 && path.getFirst().equals("country")) {
+      var stamp = clock(address.node());
+      var saved = new SavedMap(address.node(), hash, state);
+      var result = WorldCivic.profile(saved, address, stamp == null ? null : stamp.time());
+      result.put("intelligenceDocuments", state.intelligence().documents().values().stream()
+          .filter(document -> document.countryId().equals(path.getLast()))
+          .sorted(Comparator.comparing(io.mosire.worldsim.info.InfoState.Document::id))
+          .map(document -> Map.of("title", document.title(), "address",
+              WorldQueries.address(address.node(), "info", "document", document.id())))
+          .toList());
+      if (state.countries().railEconomy() != null) result.put("railCapacity", RailAllocation.capacity(saved, path.getLast(), null, null));
+      return result;
+    }
+    if (path.size() == 3 && path.getFirst().equals("info")) {
+      var entry = state.intelligence().entries().get(path.get(1) + "/" + path.get(2));
+      if (entry == null) throw new TimelineException("ENTITY_NOT_FOUND", "INFO 条目不存在");
+      return Map.of("nodeHash", hash, "info", WorldTurn.infoView(address.node(), entry));
+    }
+    if (path.size() == 3 && path.subList(0, 2).equals(List.of("diplomacy", "treaty"))) {
+      var treaty = state.civics().treaties().get(path.getLast());
+      if (treaty == null) throw new TimelineException("ENTITY_NOT_FOUND", "条约不存在");
+      var stamp = clock(address.node());
+      return Map.of("address", address.canonical(), "nodeHash", hash,
+          "treaty", treaty, "status", treaty.statusAt(stamp == null ? null : stamp.time()));
+    }
+    if (!path.getFirst().equals("map")) {
       return WorldQueries.lookup(state, address, hash);
     }
     var resolved = MapAddressResolver.resolve(state.map(), address);
@@ -135,6 +521,9 @@ public final class WorldApplicationService {
       result.put("entity", details);
     } else {
       result.put("entity", resolved.value());
+    }
+    if (resolved.value() instanceof io.mosire.worldsim.map.MapFeature feature) {
+      result.put("point", state.map().provinces().get(feature.provinceId()).displayPoint());
     }
     WorldProvenance.Result evidence = WorldProvenance.forNode(store, address.node());
     if (resolved.value() instanceof Province p) {
@@ -210,33 +599,69 @@ public final class WorldApplicationService {
 
   public synchronized Map<String, Object> territoryGaps(String nodeLabel, String scope, String countryId,
                                                          String stateId, int offset, int limit) {
+    return territoryGaps(nodeLabel, scope, countryId, stateId, offset, limit, null);
+  }
+
+  public synchronized Map<String, Object> territoryGaps(String nodeLabel, String scope, String countryId,
+                                                         String stateId, int offset, int limit, List<String> expectedProvinceIds) {
     requirePage(offset, limit);
     if (scope != null && !Set.of("reference", "all").contains(scope)) {
       throw new IllegalArgumentException("scope 须为 reference 或 all");
     }
     SavedMap saved = savedMap(nodeLabel);
     var reference = territoryReference(saved);
-    boolean referenceOnly = reference != null && !"all".equals(scope);
-    Map<String, String> expected = reference == null ? Map.of() : reference.owners();
-    var matches = territoryGapIds(saved, referenceOnly ? reference : null).stream()
-        .filter(id -> countryId == null || countryId.equals(expected.get(id)))
-        .filter(id -> stateId == null || stateId.equals(saved.map().provinces().get(id).stateId()))
-        .sorted().toList();
-    int from = Math.min(offset, matches.size());
-    int to = Math.min(from + limit, matches.size());
-    var page = matches.subList(from, to).stream().map(id -> {
+    boolean provided = expectedProvinceIds != null;
+    boolean referenceOnly = "reference".equals(scope) || scope == null && reference != null;
+    Map<String, String> expected = provided ? territoryExpectation(saved, countryId, expectedProvinceIds)
+        : reference == null ? Map.of() : reference.owners();
+    var ids = provided || referenceOnly || countryId != null ? expected.keySet() : saved.map().provinces().keySet();
+    int checked = 0;
+    int unassigned = 0;
+    int matches = 0;
+    var page = new ArrayList<TerritoryGap>(limit);
+    for (String id : ids.stream().sorted().toList()) {
       var province = saved.map().provinces().get(id);
-      var state = province.stateId() == null ? null : saved.map().states().get(province.stateId());
-      return new TerritoryGap(id, "province:" + id, WorldQueries.address(saved.node(), "map", "province", id),
-          province.name(), province.stateId(), state == null ? null : state.name(), expected.get(id));
-    }).toList();
-    var result = new LinkedHashMap<String, Object>(Map.of("node", saved.node().label(), "stateHash", saved.stateHash(),
-        "scope", referenceOnly ? "reference" : "all", "offset", from, "total", matches.size(), "gaps", page));
-    if (reference != null) {
+      if (province == null || !province.kind().equals("land")
+          || countryId != null && !countryId.equals(expected.get(id))
+          || stateId != null && !stateId.equals(province.stateId())) continue;
+      checked++;
+      var territory = saved.state().countries().territories().get(id);
+      String owner = territory == null || territory.owner() == null ? null : territory.owner().countryId();
+      String wanted = expected.get(id);
+      if (owner == null || wanted != null && !wanted.equals(owner)) {
+        if (owner == null) unassigned++;
+        if (matches >= offset && page.size() < limit) {
+          var state = province.stateId() == null ? null : saved.map().states().get(province.stateId());
+          page.add(new TerritoryGap(id, "province:" + id, WorldQueries.address(saved.node(), "map", "province", id),
+              province.name(), province.stateId(), state == null ? null : state.name(), wanted, owner,
+              owner == null ? "unassigned" : "owner-mismatch"));
+        }
+        matches++;
+      }
+    }
+    String coverage = checked == 0 ? "none" : provided ? "provided" : referenceOnly || countryId != null ? "reference" : "all";
+    var result = new LinkedHashMap<String, Object>(Map.of(
+        "node", saved.node().label(), "stateHash", saved.stateHash(), "scope", provided ? "provided" : referenceOnly ? "reference" : "all",
+        "coverage", coverage, "checkedProvinces", checked, "unassigned", unassigned, "ownershipMismatches", matches - unassigned,
+        "offset", Math.min(offset, matches), "total", matches, "gaps", List.copyOf(page)));
+    if (reference != null && !provided) {
       result.put("referenceDate", reference.date());
       result.put("source", reference.source());
     }
     return result;
+  }
+
+  private static Map<String, String> territoryExpectation(SavedMap saved, String countryId, List<String> ids) {
+    NodeAddress.requireSegment(countryId);
+    var expected = new HashMap<String, String>();
+    for (String id : ids) {
+      var province = saved.map().provinces().get(id);
+      if (province == null || !province.kind().equals("land")) {
+        throw new IllegalArgumentException("待查省份须是当前地图的陆省: " + id);
+      }
+      expected.put(id, countryId);
+    }
+    return expected;
   }
 
   public synchronized Set<String> territoryGapIds(SavedMap saved) {
@@ -285,11 +710,30 @@ public final class WorldApplicationService {
     return WorldQueries.unitMarkers(saved.state(), saved.node(), null);
   }
 
+  synchronized WorldMovement.Plan landRoute(String unit, String destination, List<String> via) {
+    var address = NodeAddress.parse(unit);
+    var saved = savedMap(address.node().label());
+    return WorldMovement.plan(saved, address, destination, via, geography(saved), landLinks(saved));
+  }
+
   synchronized WorldMovement.Estimate movementEstimate(String text, String role, List<String> route) {
     var address = NodeAddress.parse(text);
     var saved = savedMap(address.node().label());
     return WorldMovement.estimate(saved, address, role == null ? "actual" : role, route,
-        route == null ? null : geography(saved));
+        route == null ? null : geography(saved), route == null ? null : landLinks(saved));
+  }
+
+  synchronized WorldBattle.Context battleContext(String provinceAddress, List<String> attackers, List<String> defenders) {
+    var saved = savedMap(NodeAddress.parse(provinceAddress).node().label());
+    return WorldBattle.context(saved, commandContext(requireNode(saved.node())), provinceAddress, attackers, defenders);
+  }
+
+  private LandLinks landLinks(SavedMap saved) {
+    if (linksMap != saved.map()) {
+      links = new LandLinks(saved.map(), riverReference(saved));
+      linksMap = saved.map();
+    }
+    return links;
   }
 
   synchronized Map<String, Object> supplyStatus(String text) {
@@ -302,6 +746,32 @@ public final class WorldApplicationService {
     if (unit.provinceId() != null) result.put("provinceAddress", WorldQueries.address(saved.node(), "map", "province", unit.provinceId()));
     return result;
   }
+
+  synchronized Map<String, Object> inventory(String text, boolean details) {
+    var address = NodeAddress.parse(text);
+    return WorldInventory.read(savedMap(address.node().label()), address, details);
+  }
+
+  synchronized Map<String, Object> railCapacity(String text, List<String> route, String itemId) {
+    var address = NodeAddress.parse(text);
+    var saved = savedMap(address.node().label());
+    var country = WorldQueries.country(saved.state(), address);
+    var capacity = RailAllocation.capacity(saved, country.id(), route, route == null ? null : landLinks(saved));
+    var result = new LinkedHashMap<String, Object>(Map.of("stateHash", saved.stateHash(), "capacity", capacity));
+    if (itemId != null) {
+      NodeAddress.requireSegment(itemId);
+      var rail = saved.state().countries().railEconomy();
+      var weight = rail == null ? null : rail.rules().itemWeights().get(itemId);
+      result.put("itemId", itemId);
+      result.put("itemWeightStatus", weight == null ? "unknown" : "configured");
+      if (weight != null) {
+        result.put("itemWeight", weight);
+        if (capacity.remainingKg() != null) result.put("piecesByCapacity", capacity.remainingKg() / weight.kilograms());
+      }
+    }
+    return Map.copyOf(result);
+  }
+
   public synchronized Map<String, Object> marches(SavedMap saved) {
     var result = new LinkedHashMap<String, Object>(Map.of("node", saved.node().label(), "stateHash", saved.stateHash(),
         "marches", WorldQueries.marches(saved.state(), saved.node())));
@@ -372,17 +842,21 @@ public final class WorldApplicationService {
     int at = -1;
     for (int i = 0; i < path.size(); i++) if (path.get(i).ref().equals(from)) at = i;
     if (at < 0) throw new TimelineException("TIMELINE_NOT_ANCESTOR", "from 不是 to 的祖先");
+    int total = path.size() - at - 1;
+    int start = Math.min(offset, total);
+    int end = start + Math.min(limit, total - start);
     List<Map<String, Object>> changes = new ArrayList<>();
-    for (int i = at + 1; i < path.size(); i++) {
-      var n = path.get(i);
+    for (int i = start; i < end; i++) {
+      var n = path.get(at + 1 + i);
       var operations = WorldChangeSet.fromJson(n.changeSetJson()).changes();
       Map<String, Integer> kinds = new TreeMap<>();
       operations.forEach(op -> kinds.merge(op.getClass().getSimpleName(), 1, Integer::sum));
-      changes.add(Map.of("node", n.ref().label(), "changeCount", operations.size(), "kinds", kinds));
+      var entry = new LinkedHashMap<String, Object>(Map.of("node", n.ref().label(), "changeCount", operations.size(), "kinds", kinds));
+      var economy = economyChanges(operations);
+      if (!economy.isEmpty()) entry.put("militaryEconomy", economy);
+      changes.add(entry);
     }
-    int start = Math.min(offset, changes.size());
-    return Map.of("from", from.label(), "to", to.label(), "total", changes.size(), "offset", start,
-        "nodes", changes.subList(start, Math.min(start + limit, changes.size())));
+    return Map.of("from", from.label(), "to", to.label(), "total", total, "offset", start, "nodes", changes);
   }
 
   public synchronized Map<String, Object> validate(String address) {
@@ -399,6 +873,11 @@ public final class WorldApplicationService {
   }
 
   public synchronized Map<String, Object> open(String actor, String base, String expectedHash, String forkBranch) {
+    return open(actor, base, expectedHash, forkBranch, false);
+  }
+
+  public synchronized Map<String, Object> open(String actor, String base, String expectedHash, String forkBranch,
+      boolean eventTimeline) {
     requireText(actor, "actor"); requireText(expectedHash, "expectedHash");
     NodeRef ref = node(base);
     StaticWorldState prepared = load(ref);
@@ -406,10 +885,11 @@ public final class WorldApplicationService {
         ? timeline.openNext(ref, expectedHash, prepared)
         : timeline.openFork(ref, new BranchId(requireText(forkBranch, "forkBranch")), expectedHash, prepared);
     String id = UUID.randomUUID().toString();
-    drafts.put(id, new Draft(actor, copy));
+    boolean events = eventTimeline || copy.baseNode().eventTime() != null;
+    drafts.put(id, new Draft(actor, copy, events));
     var result = new LinkedHashMap<String, Object>(Map.of("draftId", id, "draftVersion", 0, "base", ref.label(),
         "baseHash", copy.baseNode().stateHash(), "targetBranch", copy.targetBranch().value(),
-        "mode", copy.kind().name().toLowerCase()));
+        "mode", copy.kind().name().toLowerCase(), "eventTimeline", events));
     putClock(result, clock(ref));
     return result;
   }
@@ -429,6 +909,11 @@ public final class WorldApplicationService {
       return previous.result();
     }
     requireVersion(draft, expectedVersion);
+    if (draft.eventTimeline) {
+      var result = applyEvents(draft, draftId, commandHash, commands, dryRun);
+      draft.requests.put(requestId, new Applied(requestHash, result));
+      return result;
+    }
     StaticWorldState candidate;
     StaticWorldState before = draft.copy.currentState();
     List<WorldChange> changes;
@@ -439,11 +924,7 @@ public final class WorldApplicationService {
     } else {
       candidate = before;
       changes = new ArrayList<>();
-      var base = draft.copy.baseNode();
-      var context = new WorldCommand.Context(base.ref(), base.stateHash(), () -> {
-        Clock stamp = clock(base.ref());
-        return stamp == null ? null : stamp.time();
-      }, this::geography);
+      var context = commandContext(draft.copy.baseNode());
       for (Map<String, Object> command : commands) {
         WorldChange change = WorldCommand.parse(command).plan(candidate, context);
         candidate = new WorldChangeSet(List.of(change)).apply(candidate);
@@ -472,9 +953,81 @@ public final class WorldApplicationService {
     var battles = changes.stream().filter(WorldChange.ResolveBattle.class::isInstance)
         .map(change -> ((WorldChange.ResolveBattle) change).battle()).toList();
     if (!battles.isEmpty()) result.put("battles", battles);
+    var economy = economyChanges(changes);
+    if (!economy.isEmpty()) result.put("militaryEconomy", economy);
     result = Map.copyOf(result);
     draft.requests.put(requestId, new Applied(requestHash, result));
     return result;
+  }
+
+  private WorldCommand.Context commandContext(TimelineNode base) {
+    return new WorldCommand.Context(base.ref(), base.stateHash(), () -> {
+      Clock stamp = clock(base.ref());
+      return stamp == null ? null : stamp.time();
+    }, this::geography, this::landLinks, this::submissions);
+  }
+
+  private Map<String, Object> applyEvents(Draft draft, String draftId, String commandHash,
+      List<Map<String, Object>> commands, boolean dryRun) {
+    var preview = draft.eventPreview;
+    WorldEventTimeline.Plan plan;
+    if (preview != null && preview.version() == draft.version && preview.commandHash().equals(commandHash)) {
+      plan = preview.plan();
+    } else {
+      var combined = new ArrayList<WorldCommand>();
+      if (draft.events != null) combined.addAll(draft.events.commands());
+      commands.stream().map(WorldCommand::parse).forEach(combined::add);
+      plan = WorldEventTimeline.plan(draft.copy, commandContext(draft.copy.baseNode()), combined);
+    }
+    var state = plan.state();
+    long version = draft.version + (dryRun ? 0 : 1);
+    var result = Map.<String, Object>of(
+        "draftId", draftId, "draftVersion", version, "dryRun", dryRun,
+        "appliedCount", commands.size(), "pendingCount", plan.commands().size(),
+        "stateHash", state.contentHash(), "clock", committedClock(state.simulationTime()),
+        "marches", WorldQueries.marches(state, draft.copy.baseNode().ref()),
+        "steps", plan.steps().stream().map(step -> Map.of("time", step.event().time(), "events", eventSummary(step, true))).toList());
+    if (dryRun) {
+      draft.eventPreview = new EventPreview(version, commandHash, plan);
+    } else {
+      draft.events = plan;
+      draft.eventPreview = null;
+      draft.version = version;
+    }
+    return result;
+  }
+
+  private static List<Map<String, Object>> eventSummary(WorldChangeSet step, boolean includeEconomyDetails) {
+    var events = new ArrayList<Map<String, Object>>();
+    for (WorldChange change : step.changes()) {
+      switch (change) {
+        case WorldChange.AdvanceEvent event -> {
+          for (var boundary : event.treatyBoundaries()) {
+            events.add(Map.of("type", "treaty-" + boundary.status(), "id", boundary.treatyId()));
+          }
+          if (event.railPeriod() != null) events.add(Map.of("type", "rail-period-opened", "periodIndex", event.railPeriod()));
+          for (var arrival : event.arrivals()) {
+            boolean blocked = arrival.passage() != null && arrival.passage().blocked();
+            events.add(Map.of("type", blocked ? "march-blocked" : "march-arrived",
+                "unitId", arrival.unitId(), "legIndex", arrival.legIndex()));
+          }
+        }
+        case WorldChange.OpenTurn opened -> events.add(Map.of("type", "turn-opened", "id", opened.brief().id()));
+        case WorldChange.ResolveTurn resolved -> events.add(Map.of("type", "turn-resolved", "id", resolved.turnId()));
+        case WorldChange.ResolveBattle resolution -> events.add(Map.of("type", "battle-resolved", "id", resolution.battle().id()));
+        case WorldChange.EconomyChange economy -> {
+          String type = economy.getClass().getSimpleName();
+          events.add(includeEconomyDetails ? Map.of("type", type, "change", economy) : Map.of("type", type));
+        }
+        default -> events.add(Map.of("type", change.getClass().getSimpleName()));
+      }
+    }
+    if (events.isEmpty()) events.add(Map.of("type", "clock"));
+    return List.copyOf(events);
+  }
+
+  private static List<WorldChange.EconomyChange> economyChanges(List<WorldChange> changes) {
+    return changes.stream().filter(WorldChange.EconomyChange.class::isInstance).map(WorldChange.EconomyChange.class::cast).toList();
   }
 
   private static Map<String, Object> territoryPreview(CountryState before, CountryState after, List<WorldChange> changes) {
@@ -511,26 +1064,48 @@ public final class WorldApplicationService {
 
   public synchronized Map<String, Object> save(String actor, String draftId, long expectedVersion,
       String requestId, long tick, String baseHash) {
+    return save(actor, draftId, expectedVersion, requestId, Long.valueOf(tick), baseHash);
+  }
+
+  public synchronized Map<String, Object> save(String actor, String draftId, long expectedVersion,
+      String requestId, Long tick, String baseHash) {
     requireText(actor, "actor"); requireText(requestId, "requestId"); requireText(baseHash, "baseHash");
-    String requestHash = JsonCodec.sha256(JsonCodec.canonicalJson(List.of(draftId, expectedVersion, tick, baseHash)));
+    String requestHash = JsonCodec.sha256(JsonCodec.canonicalJson(List.of(draftId, expectedVersion, tick == null ? "event" : tick, baseHash)));
     var existing = store.receipt(actor, requestId);
     if (existing.isPresent()) {
       if (!existing.get().requestHash().equals(requestHash)) throw new TimelineException("REQUEST_ID_CONFLICT", "requestId 已用于其他请求");
       Draft pending = drafts.get(draftId);
       if (pending != null && pending.actor.equals(actor)) drafts.remove(draftId);
       var result = nodeSummary(requireNode(existing.get().node()));
+      if (existing.get().nodes() != null) {
+        result.put("nodes", existing.get().nodes().stream().map(this::requireNode).map(this::nodeSummary).toList());
+      }
       result.put("replayedReceipt", true);
       return result;
     }
     Draft draft = draft(actor, draftId);
     requireVersion(draft, expectedVersion);
-    NodeRef ref = new NodeRef(draft.copy.targetBranch(), tick);
-    CommitReceipt receipt = new CommitReceipt(actor, requestId, requestHash, ref);
-    TimelineNode saved = timeline.save(draft.copy, tick, actor, baseHash, receipt);
-    StaticWorldState state = draft.copy.currentState();
+    TimelineNode saved;
+    StaticWorldState state;
+    List<TimelineNode> events = List.of();
+    if (draft.eventTimeline) {
+      if (tick != null) throw new TimelineException("EVENT_TICK_AUTOMATIC", "事件节点的 tick 由程序分配");
+      if (draft.events == null) throw new TimelineException("EVENT_STEPS_REQUIRED", "请先应用至少一个事件时刻");
+      var sequence = timeline.saveEvents(draft.copy, draft.events.steps(), actor, baseHash, requestId, requestHash);
+      events = sequence.nodes();
+      saved = events.getLast();
+      state = sequence.state();
+    } else {
+      if (tick == null) throw new TimelineException("TIMELINE_TICK_INVALID", "旧式编辑需要提供 tick");
+      NodeRef ref = new NodeRef(draft.copy.targetBranch(), tick);
+      CommitReceipt receipt = new CommitReceipt(actor, requestId, requestHash, ref);
+      saved = timeline.save(draft.copy, tick, actor, baseHash, receipt);
+      state = draft.copy.currentState();
+    }
     if (state.simulationTime() != null) clocks.put(saved.ref(), committedClock(state.simulationTime()));
     drafts.remove(draftId);
     Map<String, Object> result = new LinkedHashMap<>(nodeSummary(saved));
+    if (!events.isEmpty()) result.put("nodes", events.stream().map(this::nodeSummary).toList());
     result.put("replayedReceipt", false);
     try {
       result.put("view", WorldView.refresh(store, saved.ref(), state));
@@ -593,6 +1168,10 @@ public final class WorldApplicationService {
     value.put("node", node.ref().label()); value.put("parent", node.parent() == null ? null : node.parent().label());
     value.put("stateHash", node.stateHash()); value.put("savedBy", node.savedBy()); value.put("savedAt", node.savedAtEpochMilli());
     putClock(value, clock(node.ref()));
+    if (node.eventTime() != null) {
+      value.put("eventTime", node.eventTime());
+      value.put("events", eventSummary(WorldChangeSet.fromJson(node.changeSetJson()), false));
+    }
     return value;
   }
 
@@ -627,11 +1206,13 @@ public final class WorldApplicationService {
   }
 
   private static String explicitTime(TimelineNode node) {
+    if (node.eventTime() != null) return node.eventTime();
     var changes = WorldChangeSet.fromJson(node.changeSetJson()).changes();
     for (var change : changes.reversed()) {
       if (change instanceof WorldChange.SetSimulationTime clock) return clock.time();
       if (change instanceof WorldChange.StartMarch march) return march.march().startedAt();
       if (change instanceof WorldChange.ResolveBattle battle) return battle.battle().endedAt();
+      if (change instanceof WorldChange.ConfigureRailEconomy economy) return economy.time();
     }
     return null;
   }

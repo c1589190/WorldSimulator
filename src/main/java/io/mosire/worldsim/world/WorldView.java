@@ -31,7 +31,7 @@ public final class WorldView {
     Map<String, Integer> counts = new LinkedHashMap<>();
     for (var category : snapshot.chunks().entrySet()) {
       String layer = switch (category.getKey()) {
-        case "country", "orbat" -> category.getKey();
+        case "country", "orbat", "civic", "info", "decisions" -> category.getKey();
         default -> "map/" + category.getKey();
       };
       int index = 0;

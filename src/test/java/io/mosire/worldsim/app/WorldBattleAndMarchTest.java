@@ -164,14 +164,18 @@ class WorldBattleAndMarchTest {
       assertEquals("B", marches.get(0).path("blockage").path("passage").path("authorityCountryId").asText());
       assertEquals("arrived", marches.get(1).path("status").asText());
       assertEquals("connected", json(app.supplyStatus(unitAddress("main-3", "a"))).path("supply").path("status").asText());
-      save(app, 4, List.of(cmd("removeRailway", "railwayId", "rail"),
+      save(app, 4, List.of(cmd("putRailway", "railway", Map.of("id", "rail", "level", 1,
+          "provincePath", List.of(p(0), p(1), p(2)), "operation", Map.of("status", "closed", "evidence", SOURCE))),
           Map.of("op", "setTerritory", "provinceIds", List.of(p(4)), "field", "controller", "assignment",
               Map.of("countryId", "A", "evidence", SOURCE))));
       assertEquals("disconnected", json(app.supplyStatus(unitAddress("main-4", "a"))).path("supply").path("status").asText());
       var permitted = app.movementEstimate(unitAddress("main-4", "a"), null, route("main-4", 3, 4)).route();
       assertEquals("domestic", permitted.legs().getFirst().conditions().passage().status());
       assertEquals("controller", permitted.legs().getFirst().conditions().passage().basis());
-      assertEquals(5, new TimelineService(store).verifyAll());
+      assertTrue(app.savedMap("main-4").map().railways().get("rail").closed());
+      save(app, 5, List.of(cmd("removeRailway", "railwayId", "rail")));
+      assertEquals("disconnected", json(app.supplyStatus(unitAddress("main-5", "a"))).path("supply").path("status").asText());
+      assertEquals(6, new TimelineService(store).verifyAll());
     }
   }
 

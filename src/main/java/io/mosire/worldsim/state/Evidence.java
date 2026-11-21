@@ -24,4 +24,20 @@ public record Evidence(String source, String status, Double confidence, String d
       }
     }
   }
+
+  public static Evidence requireRecorded(Evidence value) {
+    if (value == null || value.status.equals("unknown") || value.status.equals("legacy-ambiguous")) {
+      throw new IllegalArgumentException("需要可用于结算的数量或裁决证据");
+    }
+    return value;
+  }
+
+  public static Evidence afterAdjustment(Evidence previous, Evidence cause) {
+    requireRecorded(previous);
+    requireRecorded(cause);
+    String status = previous.status.equals("known") && cause.status.equals("known") ? "known" : "estimated";
+    Double confidence = previous.confidence == null || cause.confidence == null
+        ? null : Math.min(previous.confidence, cause.confidence);
+    return new Evidence(cause.source, status, confidence, cause.date);
+  }
 }

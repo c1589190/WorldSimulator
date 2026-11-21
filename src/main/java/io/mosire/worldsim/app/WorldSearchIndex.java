@@ -15,13 +15,14 @@ import java.util.regex.Pattern;
 
 /** Derived name search; returned results use the same stable IDs and addresses as lookups. */
 final class WorldSearchIndex {
-  static final Set<String> KINDS = Set.of("province", "state", "region", "country", "unit");
+  static final Set<String> KINDS = Set.of("province", "state", "region", "country", "unit", "depot", "command", "document", "contact", "feature");
   private static final Pattern MARK = Pattern.compile("\\p{M}+");
 
   private record Entry(String kind, String id, String name, String context, List<String> terms) {
     String address(NodeRef node) {
       return switch (kind) {
-        case "unit" -> WorldQueries.address(node, "orbat", "unit", id);
+        case "document", "contact" -> WorldQueries.address(node, "info", kind, id);
+        case "unit", "depot", "command" -> WorldQueries.address(node, "orbat", kind, id);
         case "country" -> WorldQueries.address(node, "country", id);
         default -> WorldQueries.address(node, "map", kind, id);
       };
@@ -49,6 +50,14 @@ final class WorldSearchIndex {
       var province = u.provinceId() == null ? null : map.provinces().get(u.provinceId());
       add("unit", u.id(), u.name(), province == null ? null : province.name(), List.of());
     });
+    map.features().values().forEach(feature -> add("feature", feature.id(), feature.name(), feature.kind(), List.of()));
+    state.intelligence().documents().values().forEach(doc -> add("document", doc.id(), doc.title(), doc.countryId(), List.of()));
+    state.intelligence().contacts().values().forEach(contact -> add("contact", contact.id(), contact.title(), null, List.of()));
+    state.formations().commands().values().forEach(hq -> add("command", hq.id(), hq.name(), null, List.of()));
+    state.formations().depots().values().forEach(depot -> {
+      var province = map.provinces().get(depot.provinceId());
+      add("depot", depot.id(), depot.name(), province == null ? null : province.name(), List.of());
+    });
   }
 
   private void add(String kind, String id, String name, String context, List<String> aliases) {
@@ -58,6 +67,11 @@ final class WorldSearchIndex {
   }
 
   Map<String, Object> search(NodeRef node, String hash, String text, String kind, int offset, int limit) {
+    return search(node, hash, text, kind, offset, limit, address -> true);
+  }
+
+  Map<String, Object> search(NodeRef node, String hash, String text, String kind, int offset, int limit,
+                             java.util.function.Predicate<String> visible) {
     String query = fold(text.strip());
     if (query.isEmpty()) throw new IllegalArgumentException("搜索词不得为空");
     List<Match> matches = new ArrayList<>();
@@ -72,7 +86,7 @@ final class WorldSearchIndex {
       if (score == 0) continue;
       try {
         var hit = new Hit(entry.kind() + ":" + entry.id(), entry.kind(), entry.address(node), entry.name(), entry.context());
-        matches.add(new Match(hit, score));
+        if (visible.test(hit.address())) matches.add(new Match(hit, score));
       } catch (AddressException ignored) {
         // Old free-form map IDs may be unaddressable at this node.
       }

@@ -3,7 +3,11 @@ package io.mosire.worldsim.world;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JavaType;
 import io.mosire.worldsim.country.CountryState;
+import io.mosire.worldsim.country.CivicState;
+import io.mosire.worldsim.info.InfoState;
+import io.mosire.worldsim.info.TurnState;
 import io.mosire.worldsim.json.JsonCodec;
+import io.mosire.worldsim.map.MapFeature;
 import io.mosire.worldsim.map.Adjacency;
 import io.mosire.worldsim.map.EntityLink;
 import io.mosire.worldsim.map.Province;
@@ -88,8 +92,12 @@ public final class SnapshotFiles {
     refs.put("railway", chunks("railway", new ArrayList<>(map.railways().values())));
     refs.put("link", chunks("link", new ArrayList<>(map.entityLinks().values())));
     refs.put("adjacency", chunks("adjacency", map.adjacencies()));
+    if (!map.features().isEmpty()) refs.put("feature", chunks("feature", new ArrayList<>(map.features().values())));
     if (state.country() != null) refs.put("country", chunks("country", List.of(state.country())));
     if (state.orbat() != null) refs.put("orbat", chunks("orbat", List.of(state.orbat())));
+    if (state.civic() != null) refs.put("civic", chunks("civic", List.of(state.civic())));
+    if (state.info() != null) refs.put("info", chunks("info", List.of(state.info())));
+    if (state.decisions() != null) refs.put("decisions", chunks("decisions", List.of(state.decisions())));
     Manifest manifest = new Manifest(VERSION, state.id(), map.id(), map.name(), map.width(), map.height(),
         state.contentHash(), refs, state.simulationTime());
     String relative = dataDirectory + "/snapshots/" + UUID.randomUUID() + "/snapshot.json";
@@ -148,12 +156,15 @@ public final class SnapshotFiles {
     if (cache != null) {
       var chunks = new LinkedHashMap<String, List<String>>();
       for (String category : MAP_CATEGORIES) chunks.put(category, List.copyOf(refs(m, category)));
+      if (m.chunks().containsKey("feature")) chunks.put("feature", List.copyOf(refs(m, "feature")));
       key = new MapChunks(m.mapId(), m.mapName(), m.width(), m.height(), Map.copyOf(chunks));
       map = cache.maps.get(key);
     }
     if (map == null) map = readMap(m);
     StaticWorldState state = new StaticWorldState(m.stateId(), map,
-        readOptionalDomain(m, "country", CountryState.class), readOptionalDomain(m, "orbat", OrbatState.class), m.simulationTime());
+        readOptionalDomain(m, "country", CountryState.class), readOptionalDomain(m, "orbat", OrbatState.class), m.simulationTime(),
+        readOptionalDomain(m, "civic", CivicState.class), readOptionalDomain(m, "info", InfoState.class),
+        readOptionalDomain(m, "decisions", TurnState.class));
     if (!hash.apply(state).equals(m.stateHash())) {
       throw new TimelineException("WORLD_SNAPSHOT_HASH_MISMATCH", "快照内容 hash 不一致: " + relative);
     }
@@ -193,7 +204,8 @@ public final class SnapshotFiles {
         keyed(readList(m, "supplyHub", SupplyHub.class), SupplyHub::id),
         keyed(readList(m, "railway", Railway.class), Railway::id),
         keyed(readList(m, "link", EntityLink.class), EntityLink::key),
-        readList(m, "adjacency", Adjacency.class));
+        readList(m, "adjacency", Adjacency.class),
+        m.chunks().containsKey("feature") ? keyed(readList(m, "feature", MapFeature.class), MapFeature::id) : Map.of());
   }
 
   private <T> T readOptionalDomain(Manifest manifest, String category, Class<T> type) {

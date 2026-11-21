@@ -28,7 +28,15 @@ public record WorldMap(
     Map<String, SupplyHub> supplyHubs,
     Map<String, Railway> railways,
     Map<String, EntityLink> entityLinks,
-    List<Adjacency> adjacencies) {
+    List<Adjacency> adjacencies,
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_EMPTY)
+    Map<String, MapFeature> features) {
+
+  public WorldMap(String id, String name, double width, double height, Map<String, Province> provinces,
+                  Map<String, State> states, Map<String, StrategicRegion> strategicRegions, Map<String, SupplyHub> supplyHubs,
+                  Map<String, Railway> railways, Map<String, EntityLink> entityLinks, List<Adjacency> adjacencies) {
+    this(id, name, width, height, provinces, states, strategicRegions, supplyHubs, railways, entityLinks, adjacencies, Map.of());
+  }
 
   public WorldMap {
     if (id == null || id.isBlank()) {
@@ -55,6 +63,20 @@ public record WorldMap(
         .thenComparing(Adjacency::kind)
         .thenComparing(Adjacency::through, Comparator.nullsFirst(String::compareTo)));
     adjacencies = List.copyOf(normalized);
+    features = features == null ? Map.of() : sortedById(features, "features");
+    for (var entry : features.entrySet()) {
+      var feature = entry.getValue();
+      var land = provinces.get(feature.provinceId());
+      var water = feature.waterProvinceId() == null ? null : provinces.get(feature.waterProvinceId());
+      if (!entry.getKey().equals(feature.id()) || land == null || !"land".equals(land.kind())) {
+        throw new IllegalArgumentException("地图标记需要有效的陆省: " + feature.id());
+      }
+      if (feature.waterProvinceId() != null && (water == null || !"sea".equals(water.kind())
+          || adjacencies.stream().noneMatch(edge -> edge.a().equals(land.id()) && edge.b().equals(water.id())
+              || edge.a().equals(water.id()) && edge.b().equals(land.id())))) {
+        throw new IllegalArgumentException("港口海省必须与陆省相邻: " + feature.id());
+      }
+    }
   }
 
   private static <T> Map<String, T> sortedById(Map<String, T> source, String field) {

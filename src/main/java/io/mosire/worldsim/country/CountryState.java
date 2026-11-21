@@ -12,11 +12,18 @@ import java.util.TreeMap;
 
 /** Country identities and province-level claims for a single timeline state. */
 public record CountryState(Map<String, Country> countries, Map<String, Territory> territories,
-                           @JsonInclude(JsonInclude.Include.NON_EMPTY) Map<String, Map<String, Evidence>> transitRights) {
+                           @JsonInclude(JsonInclude.Include.NON_EMPTY) Map<String, Map<String, Evidence>> transitRights,
+                           @JsonInclude(JsonInclude.Include.NON_EMPTY) Map<String, Manpower> manpower,
+                           RailEconomy railEconomy) {
   public static final CountryState EMPTY = new CountryState(Map.of(), Map.of());
 
   public CountryState(Map<String, Country> countries, Map<String, Territory> territories) {
     this(countries, territories, Map.of());
+  }
+
+  public CountryState(Map<String, Country> countries, Map<String, Territory> territories,
+                      Map<String, Map<String, Evidence>> transitRights) {
+    this(countries, territories, transitRights, Map.of(), null);
   }
 
   public record Country(String id, String name, List<String> aliases, String color,
@@ -46,6 +53,13 @@ public record CountryState(Map<String, Country> countries, Map<String, Territory
 
   public record Territory(Assignment owner, Assignment controller) {}
 
+  public record Manpower(Integer available, Evidence evidence) {
+    public Manpower {
+      if (available == null || available < 0) throw new IllegalArgumentException("人力池须为非负整数");
+      Evidence.requireRecorded(evidence);
+    }
+  }
+
   public record Passage(String status, String authorityCountryId, String basis, Evidence evidence) {
     public boolean blocked() { return status.equals("blocked"); }
   }
@@ -56,6 +70,7 @@ public record CountryState(Map<String, Country> countries, Map<String, Territory
     var rightCopy = new TreeMap<String, Map<String, Evidence>>();
     if (transitRights != null) transitRights.forEach((country, guests) -> rightCopy.put(country, Map.copyOf(guests)));
     transitRights = Map.copyOf(rightCopy);
+    manpower = manpower == null ? Map.of() : Map.copyOf(manpower);
     for (var entry : countries.entrySet()) {
       if (!entry.getKey().equals(entry.getValue().id())) throw new IllegalArgumentException("国家键与 ID 不一致");
     }
@@ -64,7 +79,7 @@ public record CountryState(Map<String, Country> countries, Map<String, Territory
   public CountryState withCountry(Country country) {
     var next = new TreeMap<>(countries);
     next.put(country.id(), country);
-    return new CountryState(next, territories, transitRights);
+    return new CountryState(next, territories, transitRights, manpower, railEconomy);
   }
 
   public CountryState withTerritory(List<String> provinces, String field, Assignment assignment) {
@@ -79,7 +94,7 @@ public record CountryState(Map<String, Country> countries, Map<String, Territory
       if (value.owner() == null && value.controller() == null) next.remove(province);
       else next.put(province, value);
     }
-    return new CountryState(countries, next, transitRights);
+    return new CountryState(countries, next, transitRights, manpower, railEconomy);
   }
 
   public CountryState withTransitRight(String grantor, String guest, Evidence evidence) {
@@ -93,7 +108,30 @@ public record CountryState(Map<String, Country> countries, Map<String, Territory
     else grants.put(guest, evidence);
     if (grants.isEmpty()) rights.remove(grantor);
     else rights.put(grantor, grants);
-    return new CountryState(countries, territories, rights);
+    return new CountryState(countries, territories, rights, manpower, railEconomy);
+  }
+
+  public CountryState withManpower(String countryId, Manpower pool) {
+    if (!countries.containsKey(countryId) || pool == null) throw new IllegalArgumentException("人力池需要已登记国家及数量");
+    var next = new TreeMap<>(manpower);
+    next.put(countryId, pool);
+    return new CountryState(countries, territories, transitRights, next, railEconomy);
+  }
+
+  public CountryState spendManpower(String countryId, int before, int after, Evidence evidence) {
+    var pool = manpower.get(countryId);
+    if (pool == null || pool.available() != before || after < 0 || after >= before) {
+      throw new IllegalArgumentException("补员扣账与人力池基数不符");
+    }
+    return withManpower(countryId, new Manpower(after, Evidence.afterAdjustment(pool.evidence(), evidence)));
+  }
+
+  public CountryState withRailEconomy(RailEconomy next) {
+    return next == railEconomy ? this : new CountryState(countries, territories, transitRights, manpower, next);
+  }
+
+  public CountryState advanceEconomy(String time) {
+    return railEconomy == null ? this : withRailEconomy(railEconomy.atTime(time));
   }
 
   public String authority(String provinceId) {
@@ -118,6 +156,11 @@ public record CountryState(Map<String, Country> countries, Map<String, Territory
   }
 
   public void validate(WorldMap map) {
+    if (!countries.keySet().containsAll(manpower.keySet()) || railEconomy != null
+        && (!countries.keySet().containsAll(railEconomy.rules().countryQuotas().keySet())
+            || !countries.keySet().containsAll(railEconomy.countryUse().keySet()))) {
+      throw new IllegalArgumentException("人力池与铁路额度须属于已登记国家");
+    }
     for (Country country : countries.values()) {
       String capital = country.capitalProvinceId();
       if (capital != null && !map.provinces().containsKey(capital)) {

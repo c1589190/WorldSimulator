@@ -70,8 +70,15 @@ class WorldApplicationServiceTest {
 
       var gaps = JsonCodec.mapper().valueToTree(app.territoryGaps("main-0", null, "WEST", "heartland", 0, 10));
       assertEquals("reference", gaps.path("scope").asText());
+      assertEquals("reference", gaps.path("coverage").asText());
+      assertEquals(1, gaps.path("checkedProvinces").asInt());
       assertEquals(1, gaps.path("total").asInt());
       assertEquals("main-0/map/province/west", gaps.path("gaps").get(0).path("address").asText());
+      for (String scope : List.of("reference", "all")) {
+        var notCovered = app.territoryGaps("main-0", scope, "EAST", null, 0, 10);
+        assertEquals("none", notCovered.get("coverage"));
+        assertEquals(0, notCovered.get("checkedProvinces"));
+      }
       assertEquals(Set.of("west"), app.territoryGapIds(app.savedMap("main-0")));
       assertEquals(2, app.territoryGaps("main-0", "all", null, null, 0, 1).get("total"));
 
@@ -83,6 +90,22 @@ class WorldApplicationServiceTest {
           Map.of("op", "setTerritory", "provinceIds", List.of("west"), "field", "owner",
               "assignment", Map.of("countryId", "WEST", "evidence", evidence))), false);
       app.save("gm:test", draftId, 1, "save", 1, root.stateHash());
+      var audited = JsonCodec.mapper().valueToTree(
+          app.territoryGaps("main-1", null, "EAST", null, 1, 1, List.of("west", "east", "west")));
+      assertEquals("provided", audited.path("coverage").asText());
+      assertEquals(2, audited.path("checkedProvinces").asInt());
+      assertEquals(1, audited.path("unassigned").asInt());
+      assertEquals(1, audited.path("ownershipMismatches").asInt());
+      var conflict = audited.path("gaps").get(0);
+      assertEquals("owner-mismatch", conflict.path("issue").asText());
+      assertEquals("WEST", conflict.path("actualCountryId").asText());
+      assertEquals("EAST", conflict.path("expectedCountryId").asText());
+      var clear = app.territoryGaps("main-1", null, "WEST", null, 0, 1, List.of("west"));
+      assertEquals("provided", clear.get("coverage"));
+      assertEquals(1, clear.get("checkedProvinces"));
+      assertEquals(0, clear.get("total"));
+      assertThrows(IllegalArgumentException.class,
+          () -> app.territoryGaps("main-1", null, "EAST", null, 0, 1, List.of("unknown")));
       assertTrue(app.territoryGapIds(app.savedMap("main-1")).isEmpty());
       assertEquals(1, app.territoryGaps("main-1", "all", null, null, 0, 1).get("total"));
       assertEquals(Set.of("west"), app.territoryGapIds(app.savedMap("main-0")));

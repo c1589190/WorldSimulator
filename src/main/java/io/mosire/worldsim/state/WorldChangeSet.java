@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.mosire.worldsim.json.JsonCodec;
 import io.mosire.worldsim.country.CountryState;
+import io.mosire.worldsim.country.RailEconomy;
 import io.mosire.worldsim.map.Adjacency;
 import io.mosire.worldsim.map.EntityLink;
 import io.mosire.worldsim.map.Province;
@@ -15,8 +16,10 @@ import io.mosire.worldsim.map.SupplyHub;
 import io.mosire.worldsim.map.WorldMap;
 import io.mosire.worldsim.map.ProvinceShape;
 import io.mosire.worldsim.map.Vec2;
+import io.mosire.worldsim.orbat.FormationStock;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -60,17 +63,88 @@ public record WorldChangeSet(List<WorldChange> changes) {
     return empty().canonicalJson();
   }
 
+  public WorldChange.AdvanceEvent event() {
+    WorldChange.AdvanceEvent event = null;
+    for (WorldChange change : changes) {
+      if (!(change instanceof WorldChange.AdvanceEvent next)) continue;
+      if (event != null) throw new IllegalArgumentException("同一节点只能有一个事件时刻");
+      event = next;
+    }
+    return event;
+  }
+
   public StaticWorldState apply(StaticWorldState base) {
     Objects.requireNonNull(base, "base");
     var country = base.countries();
     var orbat = base.formations();
+    var civic = base.civics();
+    var info = base.intelligence();
+    var turns = base.turns();
     String time = base.simulationTime();
     List<WorldChange> mapChanges = new ArrayList<>();
     for (WorldChange change : changes) {
       switch (change) {
+        case WorldChange.SetPolitics op -> civic = civic.withPolitics(op.countryId(), op.politics());
+        case WorldChange.PutCensus op -> civic = civic.withCensus(op.records());
+        case WorldChange.PutTreaty op -> civic = civic.withTreaty(op.treaty());
+        case WorldChange.PutInfo op -> info = info.with(op.entry());
+        case WorldChange.PutHeadquarters op -> orbat = orbat.withHeadquarters(op.headquarters());
+        case WorldChange.PutIntelligenceDocument op -> info = info.with(op.intelligenceDocument());
+        case WorldChange.PutContact op -> info = info.with(new io.mosire.worldsim.info.InfoState.ContactUpdate(op.contact().id(), op.contact()), "gm");
+        case WorldChange.RetractContact op -> info = info.with(new io.mosire.worldsim.info.InfoState.ContactUpdate(op.id(), null), "gm");
+        case WorldChange.OpenTurn op -> turns = turns.open(op.brief());
+        case WorldChange.SubmitDecision op -> {
+          var brief = turns.requireOpen(op.turnId()).brief();
+          if (brief.legacy() != (op.countryId() != null)) throw new IllegalArgumentException("收件身份与回合口径不一致");
+          turns = turns.submit(op.turnId(), op.participantId(), op.proposal());
+        }
+        case WorldChange.ResolveTurn op -> {
+          turns = turns.resolve(op.turnId(), op.proposals(), op.resolution(), op.rulings());
+          for (var proposal : new java.util.TreeMap<>(op.proposals()).entrySet()) {
+            for (var report : proposal.getValue().reports()) info = info.with(report, proposal.getKey());
+          }
+        }
         case WorldChange.PutCountry op -> country = country.withCountry(op.country());
         case WorldChange.SetTerritory op -> country = country.withTerritory(op.provinceIds(), op.field(), op.assignment());
         case WorldChange.SetTransitRight op -> country = country.withTransitRight(op.grantorId(), op.guestId(), op.evidence());
+        case WorldChange.PutCommandDepot op -> orbat = orbat.withDepot(op.depot());
+        case WorldChange.SetManpowerPool op -> country = country.withManpower(op.countryId(), op.pool());
+        case WorldChange.ConfigureRailEconomy op -> {
+          if (time == null) time = op.time();
+          if (!time.equals(op.time())) throw new IllegalArgumentException("铁路经济配置须对应当前剧本时刻");
+          var rail = country.railEconomy();
+          country = country.withRailEconomy(rail == null ? RailEconomy.start(time, op.rules()) : rail.withRules(op.rules()));
+        }
+        case WorldChange.DeductEquipment op ->
+            orbat = FormationStock.apply(orbat, op.unitId(), op.documentId(), op.adjustments(), op.evidence());
+        case WorldChange.ReinforcePersonnel op -> {
+          var unit = orbat.units().get(op.unitId());
+          if (unit == null || !op.countryId().equals(unit.countryId())) throw new IllegalArgumentException("补员须从单位所属国家人力池扣账");
+          var pool = country.manpower().get(op.countryId());
+          if (pool == null) throw new IllegalArgumentException("补员需要国家人力池");
+          var evidence = Evidence.afterAdjustment(pool.evidence(), op.evidence());
+          country = country.spendManpower(op.countryId(), op.poolBefore(), op.poolAfter(), op.evidence());
+          orbat = FormationStock.apply(orbat, op.unitId(), op.documentId(), List.of(op.receipt()), evidence);
+        }
+        case WorldChange.TransferEquipment op -> {
+          var depot = orbat.depots().get(op.depotId());
+          var unit = orbat.units().get(op.unitId());
+          if (depot == null || unit == null || !depot.countryId().equals(unit.countryId()) || unit.provinceId() == null) {
+            throw new IllegalArgumentException("装备交付需要本国机关及已部署部队");
+          }
+          var receipt = op.receipt();
+          validateDelivery(country, depot.countryId(), depot.provinceId(), unit.provinceId(), op.freight());
+          if (op.freight() != null) {
+            var rail = country.railEconomy();
+            if (rail == null) throw new IllegalArgumentException("跨省铁路交付需要当期额度");
+            country = country.withRailEconomy(rail.applyCharge(depot.countryId(), receipt.itemId(), receipt.delta(), op.freight()));
+          }
+          var equipment = FormationStock.updateEquipment(depot.equipment(), receipt.itemId(), receipt.name(),
+              op.depotBefore(), op.depotAfter(), op.evidence());
+          var issued = FormationStock.equipment(equipment, receipt.itemId()).quantity();
+          var evidence = new Evidence(issued.source(), issued.status(), issued.confidence(), op.evidence().date());
+          orbat = FormationStock.apply(orbat.withDepot(depot.withEquipment(equipment)), op.unitId(), op.documentId(), List.of(receipt), evidence);
+        }
         case WorldChange.PutOrbatDocument op -> orbat = orbat.withDocument(op.document());
         case WorldChange.PutUnit op -> orbat = orbat.withUnit(op.unit(), time);
         case WorldChange.DeployUnit op -> orbat = orbat.deploy(op.unitId(), op.provinceId(), op.evidence(), time);
@@ -78,6 +152,25 @@ public record WorldChangeSet(List<WorldChange> changes) {
           if (time != null && op.time().compareTo(time) < 0) throw new IllegalArgumentException("剧本时间不能倒退");
           orbat = orbat.advanceMarches(time, op.time(), country);
           time = op.time();
+          country = country.advanceEconomy(time);
+        }
+        case WorldChange.AdvanceEvent op -> {
+          if (time != null && op.time().compareTo(time) < 0) throw new IllegalArgumentException("剧本时间不能倒退");
+          String treatyBoundary = civic.nextBoundary(time);
+          if (treatyBoundary != null && op.time().compareTo(treatyBoundary) > 0
+              || !civic.boundariesAt(time, op.time()).equals(op.treatyBoundaries())) {
+            throw new IllegalArgumentException("事件推进须按时刻记录条约生效或到期");
+          }
+          orbat = orbat.applyArrivals(time, op.time(), op.arrivals());
+          time = op.time();
+          var rail = country.railEconomy();
+          String boundary = rail == null ? null : rail.nextBoundary();
+          if (boundary != null && time.compareTo(boundary) > 0) {
+            throw new IllegalArgumentException("事件推进须按时刻结算经济期");
+          }
+          country = country.advanceEconomy(time);
+          Long period = rail == country.railEconomy() ? null : country.railEconomy().periodIndex();
+          if (!Objects.equals(period, op.railPeriod())) throw new IllegalArgumentException("事件换期记录与铁路账不一致");
         }
         case WorldChange.StartMarch op -> {
           if (time == null) time = op.march().startedAt();
@@ -97,10 +190,45 @@ public record WorldChangeSet(List<WorldChange> changes) {
       }
     }
     WorldMap map = mapChanges.isEmpty() ? base.map() : applyMap(base.map(), mapChanges);
-    return new StaticWorldState(base.id(), map, country, orbat, time);
+    orbat.validateHeadquarters(country.countries().keySet());
+    for (var document : info.documents().values()) {
+      if (!country.countries().containsKey(document.countryId()) || !country.countries().keySet().containsAll(document.countries())) {
+        throw new IllegalArgumentException("情报文档国家不存在: " + document.id());
+      }
+    }
+    for (var contact : info.contacts().values()) {
+      var province = map.provinces().get(contact.provinceId());
+      if (province == null || !province.kind().equals("land")) throw new IllegalArgumentException("情报标记需要有效陆省");
+    }
+    return new StaticWorldState(base.id(), map, country, orbat, time, civic, info, turns);
+  }
+
+  private static void validateDelivery(CountryState countries, String countryId, String from, String to,
+                                       RailEconomy.Charge charge) {
+    String province = from;
+    requireDeliveryAccess(countries, countryId, from);
+    if (charge != null) {
+      var visited = new HashSet<String>();
+      visited.add(from);
+      for (var leg : charge.segments()) {
+        var segment = leg.segment();
+        if (province.equals(segment.a())) province = segment.b();
+        else if (province.equals(segment.b())) province = segment.a();
+        else throw new IllegalArgumentException("交付铁路路段不连续");
+        if (!visited.add(province)) throw new IllegalArgumentException("交付铁路路线不能重复经过同一省");
+        requireDeliveryAccess(countries, countryId, province);
+      }
+    }
+    if (!province.equals(to)) throw new IllegalArgumentException("交付路线须连接机关和部队驻省");
+  }
+
+  private static void requireDeliveryAccess(CountryState countries, String countryId, String province) {
+    var passage = countries.entry(countryId, province);
+    if (passage.blocked() || passage.status().equals("unknown")) throw new IllegalArgumentException("缺少交付通行许可: " + province);
   }
 
   private static WorldMap applyMap(WorldMap base, List<WorldChange> mapChanges) {
+    var features = new LinkedHashMap<>(base.features());
     Map<String, Province> provinces = new LinkedHashMap<>(base.provinces());
     Map<String, State> states = new LinkedHashMap<>(base.states());
     Map<String, StrategicRegion> regions = new LinkedHashMap<>(base.strategicRegions());
@@ -111,6 +239,17 @@ public record WorldChangeSet(List<WorldChange> changes) {
 
     for (WorldChange change : mapChanges) {
       switch (change) {
+        case WorldChange.SetRiverCrossing op -> {
+          int index = 0;
+          for (; index < adjacencies.size(); index++) {
+            var edge = adjacencies.get(index);
+            if (edge.permitsLandMarch() && edge.connects(op.fromProvinceId(), op.toProvinceId())) {
+              adjacencies.set(index, edge.withRiverCrossing(op.crossing()));
+              break;
+            }
+          }
+          if (index == adjacencies.size()) throw new IllegalArgumentException("跨河确认需要普通陆地邻接");
+        }
         case WorldChange.PutProvince op -> provinces.put(op.province().id(), op.province());
         case WorldChange.PatchProvince op -> {
           Province old = provinces.get(op.provinceId());
@@ -186,6 +325,7 @@ public record WorldChangeSet(List<WorldChange> changes) {
           hubs.remove(op.supplyHubId());
           removeLinksTargeting(entityLinks, "supplyHub", op.supplyHubId());
         }
+        case WorldChange.PutMapFeature op -> features.put(op.feature().id(), op.feature());
         case WorldChange.PutRailway op -> railways.put(op.railway().id(), op.railway());
         case WorldChange.RemoveRailway op -> {
           railways.remove(op.railwayId());
@@ -201,7 +341,7 @@ public record WorldChangeSet(List<WorldChange> changes) {
       }
     }
     return new WorldMap(base.id(), base.name(), base.width(), base.height(),
-        provinces, states, regions, hubs, railways, entityLinks, adjacencies);
+        provinces, states, regions, hubs, railways, entityLinks, adjacencies, features);
   }
 
   private static void removeLinksTargeting(Map<String, EntityLink> links, String category, String targetId) {

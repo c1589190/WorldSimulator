@@ -29,12 +29,23 @@ public final class WorldRuntime {
 
   public static void run(Path worldPath, InputStream input, OutputStream output, Integer viewerPort)
       throws InterruptedException {
+    run(worldPath, input, output, viewerPort, null, null, null);
+  }
+
+  public static void run(Path worldPath, InputStream input, OutputStream output, Integer viewerPort,
+                         String turn, String country, String decisionMaker) throws InterruptedException {
+    if ((turn != null) != (country != null || decisionMaker != null)
+        || country != null && decisionMaker != null || turn != null && viewerPort != null) {
+      throw new IllegalArgumentException("决策进程需要回合及唯一的参与身份，并且不启动 GM 查看器");
+    }
     try (FileTimelineStore store = FileTimelineStore.open(worldPath)) {
       WorldApplicationService app = new WorldApplicationService(store);
-      app.overview(null); // Load and validate the committed head before exposing any tools.
+      var session = turn == null ? null : app.decisionSession(turn, country != null ? country : decisionMaker, country != null);
+      if (session == null) app.overview(null);
+      var tools = session == null ? WorldTools.create(app) : WorldTools.decisions(app, session);
       AgentPermissionSet permissions = AgentPermissionSet.builder(AccessToken.DEFAULT)
           .allowAll().destructiveAllowed(true).sensitiveAllowed(true)
-          .roles(RoleSet.of("GM"))
+          .roles(RoleSet.of(session == null ? "GM" : "DECISION"))
           .resourceScopes(ResourceScopeMap.of("world", ResourceScope.of("/" + store.worldId())))
           .build();
       ToolContext caller = ToolContext.of(AccessToken.DEFAULT, permissions, AgentIdentity.main(CommandMode.FULL));
@@ -42,8 +53,23 @@ public final class WorldRuntime {
       InputStream monitored = new EndNotifyingInputStream(input, ended);
       try (WorldViewerServer viewer = viewerPort == null ? null : WorldViewerServer.start(app, viewerPort);
            AgentToMcpServer server = AgentToMcpServer.start(
-               WorldTools.create(app), "worldsim", "0.1.0", caller, monitored, output)) {
+               tools, "worldsim", "0.1.0", caller, monitored, output)) {
         ended.await();
+      }
+    }
+  }
+
+  public static void viewDecision(Path worldPath, int port, String turn, String actor) throws InterruptedException {
+    if (turn == null || actor == null) throw new IllegalArgumentException("决策查看器需要回合及身份");
+    try (var store = FileTimelineStore.open(worldPath)) {
+      var app = new WorldApplicationService(store);
+      var session = app.decisionSession(turn, actor, false);
+      if (!session.scoped()) throw new IllegalArgumentException("决策查看器需要已开启的可见面");
+      var access = new WorldViewerServer.DecisionAccess(session.turn().node().label(), () -> app.decisionBrief(session),
+          () -> app.decisionMarkers(session), address -> app.decisionLookup(session, address),
+          query -> app.decisionSearch(session, query, 50));
+      try (var viewer = WorldViewerServer.start(app, port, access)) {
+        new CountDownLatch(1).await();
       }
     }
   }

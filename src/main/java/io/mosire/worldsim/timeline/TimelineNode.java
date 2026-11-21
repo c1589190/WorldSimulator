@@ -13,6 +13,7 @@ import java.util.Objects;
  * @param stateHash 该节点完整状态的内容哈希
  * @param savedAtEpochMilli 保存时间（审计，不参与世界状态）
  * @param savedBy 保存者
+ * @param eventTime 已结算的剧本时刻，兼容旧节点时为空
  */
 public record TimelineNode(
     NodeRef ref,
@@ -20,7 +21,13 @@ public record TimelineNode(
     String changeSetJson,
     String stateHash,
     long savedAtEpochMilli,
-    String savedBy) {
+    String savedBy,
+    String eventTime) {
+
+  public TimelineNode(NodeRef ref, NodeRef parent, String changeSetJson, String stateHash,
+      long savedAtEpochMilli, String savedBy) {
+    this(ref, parent, changeSetJson, stateHash, savedAtEpochMilli, savedBy, null);
+  }
 
   public TimelineNode {
     Objects.requireNonNull(ref, "ref");
@@ -33,6 +40,7 @@ public record TimelineNode(
     if (savedBy == null || savedBy.isBlank()) {
       throw new IllegalArgumentException("savedBy 不得为空白");
     }
+    if (eventTime != null) eventTime = SimulationTime.normalize(eventTime);
   }
 
   public boolean hasParent() {

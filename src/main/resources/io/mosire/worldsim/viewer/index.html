@@ -24,6 +24,7 @@
         <option>正在读取</option>
       </select>
       <button id="reload" type="button">刷新</button>
+      <button id="open-round-rulings" type="button" aria-haspopup="dialog" disabled>本回合裁定</button>
     </div>
   </header>
   <nav class="timeline-strip" aria-label="线性时间线">
@@ -36,8 +37,15 @@
     <aside id="military-panel" class="military-panel" aria-labelledby="military-heading" hidden>
       <header class="military-bar">
         <h2 id="military-heading">军队</h2>
-        <button id="close-military" type="button" class="quiet" aria-label="关闭军队面板" title="关闭军队面板">×</button>
+        <div class="military-actions">
+          <button id="open-subject-decisions" type="button" aria-haspopup="dialog" hidden>查看决策</button>
+          <button id="close-military" type="button" class="quiet" aria-label="关闭左栏" title="关闭左栏">×</button>
+        </div>
       </header>
+      <div id="unit-perspective" class="unit-perspective" hidden>
+        <select id="unit-perspective-seat" aria-label="观察视角的决策人" hidden></select>
+        <p id="unit-perspective-note" role="status"></p>
+      </div>
       <div id="military-content" class="military-content"></div>
     </aside>
     <section id="viewport" class="viewport" aria-label="世界地图">
@@ -68,7 +76,10 @@
           <label><input id="railways" type="checkbox"><span class="rail-key"></span>铁路示意</label>
           <label><input id="hubs" type="checkbox"><span class="hub-key"></span>补给中心</label>
           <label><input id="units" type="checkbox" checked><span class="unit-key"></span>兵牌</label>
-          <label id="march-option" hidden><input id="marches" type="checkbox" checked><span class="march-key"></span>行军路线</label>
+          <label><input id="ports" type="checkbox" checked>港口</label>
+          <label><input id="resources" type="checkbox" checked>资源</label>
+          <label><input id="contacts" type="checkbox" checked>情报兵牌</label>
+          <label id="march-option" hidden><input id="marches" type="checkbox" checked><span class="march-key"></span>所选部队路线</label>
           <label id="geo-border-option" hidden><input id="geo-borders" type="checkbox"><span class="geo-key"></span>史料边界</label>
         </div>
         <p id="geo-border-source" class="entity-source geo-border-source" hidden></p>
@@ -112,6 +123,18 @@
             <div id="province-owner-row" hidden><dt>归属</dt><dd id="province-owner"></dd></div>
             <div id="province-controller-row" hidden><dt>实际控制</dt><dd id="province-controller"></dd></div>
           </dl>
+          <section id="province-population" class="province-extra" hidden>
+            <h4>人口</h4>
+            <div id="province-population-content"></div>
+          </section>
+          <details id="province-logistics" class="province-extra">
+            <summary>铁路、补给与相邻边界</summary>
+            <div id="province-logistics-content"></div>
+          </details>
+          <section id="province-features" class="province-extra" hidden>
+            <h4>港口、资源与情报</h4>
+            <ul id="province-feature-list" class="entity-links"></ul>
+          </section>
           <div id="province-unit-section" class="province-units" hidden>
             <h4>部署单位</h4>
             <ul id="province-units" class="entity-links"></ul>
@@ -150,5 +173,19 @@
     </aside>
   </main>
   <dialog id="formation-dialog" class="formation-dialog" aria-labelledby="formation-title"></dialog>
+  <dialog id="subject-decisions-dialog" class="record-dialog" aria-labelledby="subject-decisions-title">
+    <header class="record-bar">
+      <div><h2 id="subject-decisions-title">决策原文</h2><p id="subject-decisions-context"></p></div>
+      <form method="dialog"><button type="submit" class="quiet" autofocus>关闭</button></form>
+    </header>
+    <div id="subject-decisions-body" class="record-body" aria-live="polite"></div>
+  </dialog>
+  <dialog id="round-rulings-dialog" class="record-dialog" aria-labelledby="round-rulings-title">
+    <header class="record-bar">
+      <div><h2 id="round-rulings-title">本回合裁定</h2><p id="round-rulings-context"></p></div>
+      <form method="dialog"><button type="submit" class="quiet" autofocus>关闭</button></form>
+    </header>
+    <div id="round-rulings-body" class="record-body" aria-live="polite"></div>
+  </dialog>
 </body>
 </html>

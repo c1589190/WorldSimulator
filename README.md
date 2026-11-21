@@ -122,7 +122,7 @@ AgentLib 工具调用经过角色、工具和世界资源授权；调用身份�
 
 - `world_overview`、`world_lookup`、`world_search`、`world_validate`：读世界摘要、实体和地图拓扑，通过地名、别名和 ID 查询同一节点下的规范地址。`world_lookup` 默认省略 polygon 顶点。
 - `world_geo_lookup` 接受 `name` 或 `longitude` 与 `latitude`，可指定 `node`。单独传完整省份 `address` 可反查近似经纬度和已校对的地名对应。
-- `world_territory_gaps` 分页查待补归属的陆省，返回节点地址、州和史料预期国家。可传 `node`、`countryId`、`stateId`、`offset` 和 `limit`。传 `scope="all"` 可查看全图。
+- `world_territory_gaps` 分页检查陆省归属的漏填和冲突，并返回覆盖范围与已检查省数。传 `scope="all"` 查全图，传 `countryId` 与 `expectedProvinceIds` 核对独立查证的国家省份清单。结果的 `coverage="none"` 表示当前筛选没有可核对范围。
 - `world_movement_estimate` 接受完整单位 `address`，按实编返回最低行军速度及瓶颈节点。传 `route` 可估算分段与总耗时，路线为从部署省起步的同节点陆省地址数组。显式传 `role="ideal"` 可用理想编制试算。[速度字段和路线规则](docs/superpowers/specs/2026-11-20-unit-movement-duration.md)
 - `world_marches` 读取指定保存节点的行军路径、进度、预计抵达时间及部署省。
 - `world_supply_status` 按单位地址查现时部署点的铁路补给连通状态。
@@ -132,10 +132,16 @@ AgentLib 工具调用经过角色、工具和世界资源授权；调用身份�
 - `edit_open`、`edit_apply`、`edit_save`、`edit_discard`：打开内存草稿、批量预览/应用、保存或放弃。
 - `world_view`、`world_export`：重建可读视图，或导出全部已提交分支。
 - `orbat_export`：通过已保存的文档或编制节点地址返回 `mil-org` 和损失报告。
+- `orbat_inventory` 按部署单位、实编节点或机关地址盘点装备。`world_rail_capacity` 按国家地址查询当期军用配额，带路线和 `itemId` 可估计能运多少件。
+- `orbat_deduct_equipment`、`orbat_transfer_equipment`、`orbat_reinforce_personnel` 使用与 `edit_apply` 相同的草稿参数，可以用 `dryRun: true` 预览。机关、人力池与铁路参数通过批量命令录入。[军事经济的初始化和工具参数](docs/superpowers/specs/2026-11-20-military-economy.md#3-gm-工具和持久化)
 
 行军沿用草稿预览、应用和保存。无时钟的剧本先提交 `{"op":"setSimulationTime","time":"1936-01-01T00:00:00"}`。用 `startMarch` 传当前基点下的单位 `address` 和陆省地址数组 `route`，再用 `{"op":"advanceTime","minutes":180}` 推进三个模拟小时。也可按顺序在同批预览。`cancelMarch` 用单位 `address` 停止行军。保存后在查看器的时间线切换节点核对路径和抵达省。[命令和回放契约](docs/superpowers/specs/2026-11-20-simulation-clock-and-marches.md)
 
+用 `edit_open` 的 `eventTimeline: true` 从旧节点进入事件时间线。已启用的分支在后续打开时自动沿用。`advanceTime` 支持 `minutes` 或绝对时刻 `to`。预览的 `steps` 列出各个抵达、受阻及回合截止的时刻。用 `edit_save` 省略 `tick` 发布，返回 `nodes` 节点链。新草稿可通过推进选择晚于基点的时刻，再提交在该时刻生效的变更。[事件时间线](docs/superpowers/specs/2026-11-20-event-timeline.md)
+
 战斗裁决由 `resolveBattle` 进入同一草稿，预览会列出实编扣前、损失和扣后数量。行军以 `setTransitRight` 管理定向授权，估算和已记录路段给出通行、地形与补给因素。[字段和计算规则](docs/superpowers/specs/2026-11-20-battle-and-march-conditions.md)
+
+`world_movement_estimate` 的逐段 `edge` 提供跨河候选、来源、铁路线路与运行状态。`world_battle_context` 以同节点交战省和双方单位地址检查地形、进场邻接与补给。GM 可用 `setRiverCrossing` 提交有据的确认，用 `putRailway` 记录铁路启停。[地图条件与证据](docs/superpowers/specs/2026-11-20-land-edge-conditions.md)
 
 例如，运行在同一 WSL 环境、使用 `mcpServers` 配置格式的客户端可以这样启动服务：
 
@@ -178,13 +184,38 @@ AgentLib 工具调用经过角色、工具和世界资源授权；调用身份�
 
 ## 国家与单位部署
 
+使用 DSH 等 Agent 查证 1936 开局时，加载 `worldsim-1936-research` 并在对话中指定国家及录入范围。同一个工作区可以连续补录多个国家。新任务按工作区约定从当前资料分支头继续，每次保留史料、可重放命令与保存回执。[通用查证 Skill](.agents/skills/worldsim-1936-research/SKILL.md)
+
 `world_search` 接受 `query`、可选的 `node` 和 `kind`，例如查询 `{"query":"Lisboa","kind":"province"}`。命中包含稳定 ID、规范地址和上下文。国家、单位、编制文档的地址示例分别为 `scene-1/country/POR`、`scene-1/orbat/unit/por-governo`、`scene-1/orbat/doc/por-governo-actual/node/root`。
 
 用 `putCountry` 定义国家，`setTerritory` 为明确的省 ID 列表分别设置 `owner` 或 `controller`。每条归属记录带来源，预览会列出覆盖的省和被替换的归属。用 `putOrbatDocument` 写 `orbat-native-v1`，或用 `importMilOrg` 导入 DSH 文件内容。再用 `putUnit` 引用两类编制，可用 `deployUnit` 调整同一单位的部署引用。单位查询返回有效编制的规范地址。源文件没给出的员额或装备以未知显示。字段与地址规则见[单位与编制契约](docs/superpowers/specs/2026-11-19-unit-address-and-orbat-format.md)。
 
+## 国家档案、INFO 和决策回合
+
+GM 用 `world_lookup` 查国家政治及外交，用 `world_population` 按日期和口径查看省、州或实控范围人口。用草稿写入人口、条约与 INFO。查看器点选陆省可查看人口与设施，点击归属或实控链接可在左栏查看同节点国家档案。选中国家或单位后，左栏栏头的「查看决策」打开原文与 GM 批示，顶部的「本回合裁定」可查看回合总说明与全部裁定。
+
+GM 用 `openTurn.brief.participants` 显式绑定国家或已部署单位的决策人，并用 `putInfo.entry.decisionAudience` 指定接收身份。发布后，由可信宿主为每个获准身份启动绑定该回合的 MCP。
+
+```sh
+java -jar /path/to/worldsim.jar mcp --decision-turn scenario-2/turn/round1 --decision-maker pol-cabinet
+```
+
+此入口提供该身份简报、授权查询及一次决策提交。旧国别回合继续用 `--decision-country POL`。同一世界的 stdio 会话按顺序运行。GM 用 `world_turn` 查收件，在原正式分支草稿中提交裁决和领域变更。[节点面板与决策人](docs/superpowers/specs/2026-11-20-node-panels-and-decision-makers.md) · [史料查证 Skill](.agents/skills/worldsim-1936-research/SKILL.md)
+
+`resolveTurn` 可用 `rulings` 逐项写 GM 批示或独立裁定。每条填写 `id`、`title`、`text`，关联一份已收件提案时填写 `decisionMakerId` 和 `disposition`。[裁定记录格式](docs/superpowers/specs/2026-11-20-node-panels-and-decision-makers.md#9-决策原文与-gm-裁定)
+
+设置 `openTurn.brief.scoped=true` 启用身份可见面。决策 MCP 提供 `decision_search`、`decision_markers`，并接受结构化陆路调动和情报上报。GM 用 `world_plan_land_route` 规划陆路，再下达 `startMarch`。可在独立只读副本启动绑定身份的地图查看器。
+
+```sh
+java -jar worldsim.jar decision-viewer --port 8785 \
+  --decision-turn operations-demo-5/turn/dispatch --decision-maker field
+```
+
+GM 用 `putHeadquarters` 写参谋机关，`putIntelligenceDocument` 发布文档，`putContact` 投递情报。地图港口与资源点用 `putMapFeature` 录入。[可见面与设施契约](docs/superpowers/specs/2026-11-21-operational-visibility.md)
+
 ## 当前范围
 
-已实现地图与地名查询、国家归属和控制、ORBAT 编制、单位部署与回放、文件时间线、GM MCP 和只读查看器。INFO 运行时、DM 权限、外部经纬度配准和动态行军、战斗、补给在后续阶段。文件存档的进程中断恢复已做进程级验证，跨平台实际断电行为仍需在目标文件系统测试。
+已实现地图与地名查询、国家归属和控制、ORBAT 编制、单位部署与回放、文件时间线、GM MCP 和只读查看器。首版 INFO、国家与单位决策 MCP、外部地理配准、动态行军、战斗裁决和军事经济均已接入。文件存档的进程中断恢复已做进程级验证，跨平台实际断电行为仍需在目标文件系统测试。
 
 设计及状态见 [`docs/agents/STATUS.md`](docs/agents/STATUS.md) 和 [`docs/superpowers/specs/2026-11-17-map-orbat-info-timeline-design.md`](docs/superpowers/specs/2026-11-17-map-orbat-info-timeline-design.md)。
 

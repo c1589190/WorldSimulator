@@ -5,6 +5,11 @@ const counterWidth = 50;
 const counterHeight = 32;
 const counterGap = 8;
 const battleAccent = '#efad85';
+const contactAccent = '#e7a6ff';
+const ghostPadding = 5;
+const ghostSprites = new Map();
+const noSelection = new Set();
+let ghostScratch;
 const number = new Intl.NumberFormat('zh-CN');
 const centered = [[0, 0]];
 const offsets = [...centered];
@@ -38,6 +43,7 @@ function normalized(value) {
 
 function identityLine(unit) {
   if (unit.kind === 'battle') return '战斗记录';
+  if (unit.kind === 'contact') return '情报报告';
   return [echelons.get(normalized(unit.echelon))?.[0] || unit.echelon,
     types.get(normalized(unit.type))?.[0] || unit.type].filter(Boolean).join(' · ');
 }
@@ -46,10 +52,16 @@ function countBattles(markers) {
   return markers.filter(marker => marker.kind === 'battle').length;
 }
 
+function countContacts(markers) {
+  return markers.filter(marker => marker.kind === 'contact').length;
+}
+
 export function counterSummary(markers) {
   const battles = countBattles(markers);
-  const units = markers.length - battles;
+  const contacts = countContacts(markers);
+  const units = markers.length - battles - contacts;
   return [units && number.format(units) + ' 个部署单位',
+    contacts && number.format(contacts) + ' 份情报',
     battles && number.format(battles) + ' 场战斗'].filter(Boolean).join(' · ');
 }
 
@@ -57,7 +69,7 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-export function layoutUnitCounters(units, { left, top, width, height, scale, zoom }) {
+export function layoutUnitCounters(units, { left, top, width, height, scale, zoom, avoid = [] }) {
   const hits = [];
   if (zoom < COUNTER_HIDE_ZOOM || width < 30 || height < 30) return hits;
   const cardWidth = Math.min(counterWidth, width - 8);
@@ -68,9 +80,10 @@ export function layoutUnitCounters(units, { left, top, width, height, scale, zoo
   const stepY = cardHeight + counterGap;
   const bottom = height > 160 ? 58 : 4;
   const expanded = zoom >= STACK_ZOOM;
-  const spread = expanded ? offsets : centered;
   const markers = expanded ? units.toSorted((a, b) => Number(b.kind === 'battle') - Number(a.kind === 'battle')) : units;
-  const occupied = new Map();
+  const spread = expanded || avoid.length ? offsets : centered;
+  const occupied = new Map(avoid.map(hit => [Math.floor(hit.x / stepX) + '/' + Math.floor(hit.y / stepY), hit]));
+  const reserved = new Set(avoid);
   const stackedProvinces = new Map();
 
   function nearby(x, y, column, row) {
@@ -101,6 +114,7 @@ export function layoutUnitCounters(units, { left, top, width, height, scale, zoo
     }
     let covered;
     let unitStack;
+    let placed = false;
     for (const [dx, dy] of spread) {
       const x = clamp(anchorX + dx * (stepX + 1), halfWidth + 4, width - halfWidth - 4);
       const y = clamp(anchorY + dy * (stepY + 1), halfHeight + 4, height - halfHeight - bottom);
@@ -108,20 +122,25 @@ export function layoutUnitCounters(units, { left, top, width, height, scale, zoo
       const row = Math.floor(y / stepY);
       const overlap = nearby(x, y, column, row);
       if (overlap) {
+        if (reserved.has(overlap)) continue;
         covered ??= overlap;
         if (expanded && unit.kind !== 'battle' && overlap.units[0].kind !== 'battle') unitStack ??= overlap;
+        if (!expanded) break;
         continue;
       }
       const hit = { x, y, anchorX, anchorY, width: cardWidth, height: cardHeight, units: [unit] };
       occupied.set(column + '/' + row, hit);
       hits.push(hit);
-      covered = null;
+      placed = true;
       break;
     }
-    if (covered) {
+    if (!placed && covered) {
       const stack = unitStack || covered;
       stack.units.push(unit);
       if (unit.provinceAddress) stackedProvinces.set(unit.provinceAddress, stack);
+    } else if (!placed && avoid.length) {
+      // Keep the deployment behind foreground markers when there is no space to displace it.
+      hits.push({ x: anchorX, y: anchorY, anchorX, anchorY, width: cardWidth, height: cardHeight, units: [unit] });
     }
   }
   return hits;
@@ -179,7 +198,7 @@ function symbol(ctx, x, y, size, type, ink) {
       ctx.font = '700 8px system-ui';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(icon === 'headquarters' ? 'HQ' : '·', 0, 0, 18);
+      ctx.fillText(type === 'uncertain' ? '?' : icon === 'headquarters' ? 'HQ' : '·', 0, 0, 18);
   }
   ctx.stroke();
   ctx.restore();
@@ -205,8 +224,7 @@ function battleSymbol(ctx, x, y, size) {
   ctx.restore();
 }
 
-export function drawUnitCounters(ctx, hits, selected) {
-  ctx.save();
+function drawCounterLeaders(ctx, hits) {
   for (const hit of hits) {
     if (Math.hypot(hit.x - hit.anchorX, hit.y - hit.anchorY) < 8) continue;
     ctx.beginPath();
@@ -223,15 +241,26 @@ export function drawUnitCounters(ctx, hits, selected) {
     ctx.fillStyle = '#f4e3b3';
     ctx.fill();
   }
+}
+
+function counterCountryColor(units) {
+  const [front] = units;
+  return nationColor(units.every(unit => unit.countryId === front.countryId) ? front.countryColor : null);
+}
+
+export function drawUnitCounters(ctx, hits, selected) {
+  ctx.save();
+  drawCounterLeaders(ctx, hits);
   for (const hit of hits) {
     const { x, y, units, width, height } = hit;
     const front = units[0];
     const stack = units.length > 1;
     const battles = countBattles(units);
-    const deployed = units.length - battles;
+    const contacts = countContacts(units);
+    const deployed = units.length - battles - contacts;
+    const reportsOnly = contacts === units.length;
     const active = selected.size > 0 && units.some(unit => selected.has(unit.address));
-    const sharedCountry = units.every(unit => unit.countryId === front.countryId);
-    const accent = battles ? battleAccent : nationColor(sharedCountry ? front.countryColor : null);
+    const accent = reportsOnly ? contactAccent : battles ? battleAccent : counterCountryColor(units);
     const cardX = x - width / 2;
     const cardY = y - height / 2;
     const ink = active ? '#ffe5a9' : '#edf2df';
@@ -241,18 +270,37 @@ export function drawUnitCounters(ctx, hits, selected) {
       ctx.fillStyle = accent;
       ctx.fillRect(cardX + 6, cardY - 3, width - 10, 3);
     }
-    ctx.fillStyle = battles ? (active ? '#5e3931' : '#472e2a') : (active ? '#3d4634' : '#233933');
+    ctx.fillStyle = reportsOnly ? '#372c45' : battles ? (active ? '#5e3931' : '#472e2a') : (active ? '#3d4634' : '#233933');
     ctx.fillRect(cardX, cardY, width, height);
     ctx.fillStyle = accent;
     ctx.fillRect(cardX + 1, cardY + 1, 4, height - 2);
-    ctx.strokeStyle = active ? '#ffd082' : battles ? '#d6a18b' : '#bcc9b6';
+    ctx.strokeStyle = active ? '#ffd082' : reportsOnly ? contactAccent : battles ? '#d6a18b' : '#bcc9b6';
     ctx.lineWidth = active ? 2 : 1;
+    if (reportsOnly) ctx.setLineDash([4, 2]);
     ctx.strokeRect(cardX + .5, cardY + .5, width - 1, height - 1);
+    if (reportsOnly) ctx.setLineDash([]);
 
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'center';
     ctx.fillStyle = ink;
-    if (battles) {
+    if (contacts) {
+      if (reportsOnly) {
+        symbol(ctx, stack ? cardX + width * .32 : x, y, Math.min(24, width * .48), 'uncertain', contactAccent);
+        if (stack) {
+          ctx.font = '750 15px system-ui';
+          ctx.fillStyle = contactAccent;
+          ctx.fillText(number.format(contacts), cardX + width * .73, y, width * .45);
+        }
+      } else {
+        const kinds = [[deployed, '□', ink], [contacts, '?', contactAccent], [battles, '×', battleAccent]]
+          .filter(([count]) => count > 0);
+        ctx.font = '700 9px system-ui';
+        kinds.forEach(([count, glyph, color], index) => {
+          ctx.fillStyle = color;
+          ctx.fillText(glyph + ' ' + number.format(count), x, y + (index - (kinds.length - 1) / 2) * 9, width - 10);
+        });
+      }
+    } else if (battles) {
       const glyphX = cardX + width * .32;
       const labelX = cardX + width * .72;
       const labelWidth = width * .47;
@@ -293,6 +341,49 @@ export function drawUnitCounters(ctx, hits, selected) {
   ctx.restore();
 }
 
+function ghostSprite(hit, density) {
+  const { width, height, units } = hit;
+  const key = JSON.stringify([density, width, height, units.length, counterCountryColor(units),
+    units.length === 1 ? [units[0].countryId, normalized(units[0].type), normalized(units[0].echelon)] : null]);
+  const cached = ghostSprites.get(key);
+  if (cached) {
+    ghostSprites.delete(key);
+    ghostSprites.set(key, cached);
+    return cached;
+  }
+  ghostScratch ??= document.createElement('canvas');
+  ghostScratch.width = Math.ceil((width + 2 * ghostPadding) * density);
+  ghostScratch.height = Math.ceil((height + 2 * ghostPadding) * density);
+  const ctx = ghostScratch.getContext('2d');
+  ctx.scale(density, density);
+  const x = width / 2 + ghostPadding;
+  const y = height / 2 + ghostPadding;
+  drawUnitCounters(ctx, [{ x, y, anchorX: x, anchorY: y, width, height, units }], noSelection);
+
+  // Filter a small sprite once, rather than filtering each primitive on the map on every frame.
+  const sprite = document.createElement('canvas');
+  sprite.width = ghostScratch.width;
+  sprite.height = ghostScratch.height;
+  const raster = sprite.getContext('2d');
+  raster.filter = `grayscale(1) blur(${.6 * density}px)`;
+  raster.drawImage(ghostScratch, 0, 0);
+  ghostSprites.set(key, sprite);
+  if (ghostSprites.size > 128) ghostSprites.delete(ghostSprites.keys().next().value);
+  return sprite;
+}
+
+export function drawGhostCounters(ctx, hits, density) {
+  ctx.save();
+  ctx.globalAlpha = .30;
+  drawCounterLeaders(ctx, hits);
+  for (const hit of hits) {
+    const sprite = ghostSprite(hit, density);
+    ctx.drawImage(sprite, hit.x - hit.width / 2 - ghostPadding, hit.y - hit.height / 2 - ghostPadding,
+      sprite.width / density, sprite.height / density);
+  }
+  ctx.restore();
+}
+
 function element(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -309,13 +400,14 @@ function action(label, onClick, className) {
 
 function badge(unit) {
   const frame = element('span', 'military-badge');
-  frame.style.setProperty('--nation', unit.kind === 'battle' ? battleAccent : nationColor(unit.countryColor));
+  frame.style.setProperty('--nation', unit.kind === 'contact' ? contactAccent : unit.kind === 'battle' ? battleAccent : nationColor(unit.countryColor));
   const canvas = element('canvas');
   canvas.width = 84;
   canvas.height = 60;
   canvas.setAttribute('aria-hidden', 'true');
   const ctx = canvas.getContext('2d');
   if (unit.kind === 'battle') battleSymbol(ctx, 42, 30, 40);
+  else if (unit.kind === 'contact') symbol(ctx, 42, 30, 49, 'uncertain', contactAccent);
   else symbol(ctx, 42, 30, 49, unit.type, '#ebeed8');
   frame.append(canvas);
   return frame;
@@ -548,10 +640,10 @@ function rosterView(roster, actions) {
   const heading = element('section', 'military-hero');
   const caption = element('div', 'military-hero-copy');
   const sameProvince = roster.units.every(unit => unit.provinceAddress === roster.units[0].provinceAddress);
-  const hasBattles = countBattles(roster.units) > 0;
-  caption.append(element('h3', '', hasBattles ? counterSummary(roster.units) : '部署单位'),
+  const specialMarkers = roster.units.some(unit => unit.kind === 'battle' || unit.kind === 'contact');
+  caption.append(element('h3', '', specialMarkers ? counterSummary(roster.units) : '部署单位'),
     element('p', '', sameProvince ? roster.units[0].provinceName || '同省' : '邻近地点'));
-  if (!hasBattles) heading.append(element('span', 'military-badge military-count', number.format(roster.units.length)));
+  if (!specialMarkers) heading.append(element('span', 'military-badge military-count', number.format(roster.units.length)));
   heading.append(caption);
   const controls = element('div', 'military-actions');
   controls.append(action('放大展开', () => actions.locate(roster.point), 'military-primary'));

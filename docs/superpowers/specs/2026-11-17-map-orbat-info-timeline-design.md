@@ -6,6 +6,7 @@
 > **用户设计原稿**：[`2026-11-17-worldsim-architecture-design-source.md`](2026-11-17-worldsim-architecture-design-source.md)  
 > **邻仓/DSH 侦察证据**：[`../reports/2026-11-17-neighbor-projects-recon.md`](../reports/2026-11-17-neighbor-projects-recon.md)  
 > **冲突口径**：用户当次指令 > 用户设计原稿 > 本文；本文中的工程建议若被用户否定，应追加新设计/取代头，不静默改代码。
+> **局部取代（2026-11-20）**：§4 中决策侧的开放状态及 §6 的 GM-only 范围见[国家状态、INFO 与决策回合](2026-11-20-civic-info-turns.md)。决策人仅通过该契约的窄工具面参与。
 > **存储范围补充（2026-11-17）**：§8 的 SQLite 是已交付首阶段方案；用户原稿 §11–12 已裁定 `world/` 启动和 JSON/文本权威存档、SQLite 仅作可重建索引。文件布局/实现细节见本文 §11；实际实现状态以 STATUS 为准。
 > **局部取代（2026-11-19）**：§3 中的原生编制与部署字段、§5.1 的运行时单位路径示例，由[地图单位地址与通用 ORBAT 编制格式](2026-11-19-unit-address-and-orbat-format.md)统一。
 > **阶段范围更新（2026-11-19）**：§8 保留 2026-11-17 的静态状态起步范围。存储与 GM stdio 工具以 §11.7–11.8 为准，查看器与部署以[查看器专题](2026-11-19-readonly-map-viewer.md)和[单位与编制契约](2026-11-19-unit-address-and-orbat-format.md)为准。

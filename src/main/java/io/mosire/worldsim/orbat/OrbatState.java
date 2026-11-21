@@ -15,11 +15,22 @@ import java.util.TreeMap;
 /** Formation documents and the effective runtime units at a timeline node. */
 public record OrbatState(Map<String, OrbatDocument> documents, Map<String, OrbatDocument> priorIdeals,
                          Map<String, Unit> units, @JsonInclude(JsonInclude.Include.NON_EMPTY) Map<String, March> marches,
-                         @JsonInclude(JsonInclude.Include.NON_EMPTY) Map<String, Battle> battles) {
+                         @JsonInclude(JsonInclude.Include.NON_EMPTY) Map<String, Battle> battles,
+                         @JsonInclude(JsonInclude.Include.NON_EMPTY) Map<String, CommandDepot> depots,
+                         @JsonInclude(JsonInclude.Include.NON_EMPTY) Map<String, Headquarters> commands) {
+  public OrbatState(Map<String, OrbatDocument> documents, Map<String, OrbatDocument> priorIdeals,
+                    Map<String, Unit> units, Map<String, March> marches, Map<String, Battle> battles, Map<String, CommandDepot> depots) {
+    this(documents, priorIdeals, units, marches, battles, depots, Map.of());
+  }
   public static final OrbatState EMPTY = new OrbatState(Map.of(), Map.of(), Map.of());
 
   public OrbatState(Map<String, OrbatDocument> documents, Map<String, OrbatDocument> priorIdeals, Map<String, Unit> units) {
-    this(documents, priorIdeals, units, Map.of(), Map.of());
+    this(documents, priorIdeals, units, Map.of(), Map.of(), Map.of());
+  }
+
+  public OrbatState(Map<String, OrbatDocument> documents, Map<String, OrbatDocument> priorIdeals,
+                    Map<String, Unit> units, Map<String, March> marches, Map<String, Battle> battles) {
+    this(documents, priorIdeals, units, marches, battles, Map.of());
   }
 
   public record Ref(String documentId, String nodeId, String contentHash) {
@@ -48,12 +59,42 @@ public record OrbatState(Map<String, OrbatDocument> documents, Map<String, Orbat
     }
   }
 
+  public OrbatState withHeadquarters(Headquarters headquarters) {
+    var next = new java.util.TreeMap<>(commands);
+    next.put(headquarters.id(), headquarters);
+    return new OrbatState(documents, priorIdeals, units, marches, battles, depots, next);
+  }
+
+  public void validateHeadquarters(java.util.Set<String> countries) {
+    var generalStaff = new java.util.HashSet<String>();
+    var assigned = new java.util.HashSet<String>();
+    for (var headquarters : commands.values()) {
+      var parent = headquarters.parentId() == null ? null : commands.get(headquarters.parentId());
+      var depot = headquarters.depotId() == null ? null : depots.get(headquarters.depotId());
+      String country = headquarters.countryId();
+      if (!countries.contains(country)
+          || headquarters.kind().equals("general-staff") && !generalStaff.add(country)
+          || headquarters.parentId() != null && (parent == null || !country.equals(parent.countryId()) || !parent.kind().equals("general-staff"))
+          || headquarters.depotId() != null && (depot == null || !country.equals(depot.countryId()))) {
+        throw new IllegalArgumentException("参谋机关或隶属关系无效: " + headquarters.id());
+      }
+      for (String id : headquarters.unitIds()) {
+        var unit = units.get(id);
+        if (unit == null || !country.equals(unit.countryId()) || !assigned.add(id)) {
+          throw new IllegalArgumentException("军队指挥关系无效: " + id);
+        }
+      }
+    }
+  }
+
   public OrbatState {
+    commands = commands == null ? Map.of() : Map.copyOf(commands);
     documents = Map.copyOf(documents);
     priorIdeals = Map.copyOf(priorIdeals);
     units = Map.copyOf(units);
     marches = marches == null ? Map.of() : Map.copyOf(marches);
     battles = battles == null ? Map.of() : Map.copyOf(battles);
+    depots = depots == null ? Map.of() : Map.copyOf(depots);
     for (var entry : documents.entrySet()) {
       if (!entry.getKey().equals(entry.getValue().documentId())) throw new IllegalArgumentException("编制文档键与 ID 不一致");
     }
@@ -63,6 +104,15 @@ public record OrbatState(Map<String, OrbatDocument> documents, Map<String, Orbat
     for (var entry : battles.entrySet()) {
       if (!entry.getKey().equals(entry.getValue().id())) throw new IllegalArgumentException("战斗键与 ID 不一致");
     }
+    for (var entry : depots.entrySet()) {
+      if (!entry.getKey().equals(entry.getValue().id())) throw new IllegalArgumentException("机关库存键与 ID 不一致");
+    }
+  }
+
+  public OrbatState withDepot(CommandDepot depot) {
+    var next = new TreeMap<>(depots);
+    next.put(depot.id(), depot);
+    return new OrbatState(documents, priorIdeals, units, marches, battles, next, commands);
   }
 
   public OrbatState withDocument(OrbatDocument document) {
@@ -72,12 +122,12 @@ public record OrbatState(Map<String, OrbatDocument> documents, Map<String, Orbat
       throw new IllegalArgumentException("同一编制文档的口径须一致: " + document.documentId());
     }
     if (previous == null || !document.role().equals("ideal") || previous.equals(document)) {
-      return new OrbatState(next, priorIdeals, units, marches, battles);
+      return new OrbatState(next, priorIdeals, units, marches, battles, depots, commands);
     }
     var versions = new TreeMap<>(priorIdeals);
     versions.put(previous.contentHash(), previous);
     versions.remove(document.contentHash());
-    return new OrbatState(next, versions, units, marches, battles);
+    return new OrbatState(next, versions, units, marches, battles, depots, commands);
   }
 
   public OrbatState withUnit(Unit unit, String time) {
@@ -91,7 +141,7 @@ public record OrbatState(Map<String, OrbatDocument> documents, Map<String, Orbat
     }
     var next = new TreeMap<>(units);
     next.put(unit.id(), unit);
-    return new OrbatState(documents, priorIdeals, next, orders, battles);
+    return new OrbatState(documents, priorIdeals, next, orders, battles, depots, commands);
   }
 
   public Unit bindIdeal(Unit unit) {
@@ -144,7 +194,7 @@ public record OrbatState(Map<String, OrbatDocument> documents, Map<String, Orbat
   private OrbatState withMarch(String unitId, March march) {
     var orders = new TreeMap<>(marches);
     orders.put(unitId, march);
-    return new OrbatState(documents, priorIdeals, units, orders, battles);
+    return new OrbatState(documents, priorIdeals, units, orders, battles, depots, commands);
   }
 
   public OrbatState advanceMarches(String previousTime, String time, CountryState countries) {
@@ -172,7 +222,65 @@ public record OrbatState(Map<String, OrbatDocument> documents, Map<String, Orbat
       String province = progress.provinceId();
       if (!province.equals(unit.provinceId())) next.put(unit.id(), unit.withDeployment(province, march.evidence()));
     }
-    return new OrbatState(documents, priorIdeals, next, orders, battles);
+    return new OrbatState(documents, priorIdeals, next, orders, battles, depots, commands);
+  }
+
+  public String nextArrivalTime(String time) {
+    String earliest = null;
+    for (March march : marches.values()) {
+      var progress = march.progress(time);
+      if (!progress.moving()) continue;
+      String due = march.arrivalTime(progress.reachedLegs());
+      if (earliest == null || due.compareTo(earliest) < 0) earliest = due;
+    }
+    return earliest;
+  }
+
+  public List<March.Arrival> planArrivals(String previousTime, String time, CountryState countries) {
+    return dueLegs(previousTime, time).entrySet().stream().map(entry -> {
+      String id = entry.getKey();
+      int index = entry.getValue();
+      var leg = marches.get(id).legs().get(index);
+      var passage = leg.conditions() == null ? null : countries.entry(units.get(id).countryId(), leg.to());
+      return new March.Arrival(id, index, passage);
+    }).toList();
+  }
+
+  public OrbatState applyArrivals(String previousTime, String time, List<March.Arrival> arrivals) {
+    var due = dueLegs(previousTime, time);
+    if (due.size() != arrivals.size()) throw new IllegalArgumentException("抵达记录与到期路段不一致");
+    if (due.isEmpty()) return this;
+    var next = new TreeMap<>(units);
+    var orders = new TreeMap<>(marches);
+    for (var arrival : arrivals) {
+      String id = arrival.unitId();
+      int index = arrival.legIndex();
+      if (!Objects.equals(due.remove(id), index)) throw new IllegalArgumentException("抵达记录的单位或路段不一致: " + id);
+      March march = marches.get(id);
+      var leg = march.legs().get(index);
+      var passage = arrival.passage();
+      if ((passage == null) != (leg.conditions() == null)) throw new IllegalArgumentException("抵达记录的通行依据不一致: " + id);
+      if (passage != null && passage.blocked()) {
+        orders.put(id, march.block(index, passage));
+      } else {
+        next.put(id, units.get(id).withDeployment(leg.to(), march.evidence()));
+      }
+    }
+    return new OrbatState(documents, priorIdeals, next, orders, battles, depots, commands);
+  }
+
+  private Map<String, Integer> dueLegs(String previousTime, String time) {
+    var due = new TreeMap<String, Integer>();
+    for (var entry : marches.entrySet()) {
+      March march = entry.getValue();
+      var progress = march.progress(previousTime);
+      if (!progress.moving()) continue;
+      int index = progress.reachedLegs();
+      int comparison = march.arrivalTime(index).compareTo(time);
+      if (comparison < 0) throw new IllegalArgumentException("事件推进跳过抵达时刻: " + entry.getKey());
+      if (comparison == 0) due.put(entry.getKey(), index);
+    }
+    return due;
   }
 
   public OrbatState resolveBattle(Battle battle, String time) {
@@ -200,10 +308,16 @@ public record OrbatState(Map<String, OrbatDocument> documents, Map<String, Orbat
       }
       updated.put(loss.documentId(), battle.applyLoss(doc, loss));
     }
-    return new OrbatState(updated, priorIdeals, units, orders, records);
+    return new OrbatState(updated, priorIdeals, units, orders, records, depots, commands);
   }
 
   public void validate(WorldMap map, CountryState countries, String time) {
+    for (CommandDepot depot : depots.values()) {
+      var province = map.provinces().get(depot.provinceId());
+      if (province == null || !province.kind().equals("land") || !countries.countries().containsKey(depot.countryId())) {
+        throw new IllegalArgumentException("机关库存需要有效的驻省和国家: " + depot.id());
+      }
+    }
     for (var version : priorIdeals.entrySet()) {
       if (!version.getValue().role().equals("ideal") || !version.getKey().equals(version.getValue().contentHash())) {
         throw new IllegalArgumentException("理想编制版本不匹配: " + version.getKey());

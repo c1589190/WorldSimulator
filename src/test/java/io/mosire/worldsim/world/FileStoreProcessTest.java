@@ -18,6 +18,24 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class FileStoreProcessTest {
   @Test
+  void eventSeriesPublishesAllNodesAndItsReceiptTogether(@TempDir Path temp) throws Exception {
+    for (String phase : new String[]{"series-node-published", "series-manifest-published"}) {
+      Path world = temp.resolve(phase);
+      Process process = start(world, phase);
+      assertTrue(process.waitFor(30, TimeUnit.SECONDS));
+      assertEquals(42, process.exitValue(), new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8));
+      try (var store = FileTimelineStore.open(world)) {
+        boolean committed = phase.equals("series-manifest-published");
+        assertEquals(committed ? 3 : 1, new TimelineService(store).verifyAll(), phase);
+        assertEquals(committed ? 2 : 0, store.head(new BranchId("main")).orElseThrow().tick(), phase);
+        var receipt = store.receipt("gm:probe", "request");
+        assertEquals(committed, receipt.isPresent());
+        if (committed) assertEquals(2, receipt.orElseThrow().nodes().size());
+      }
+    }
+  }
+
+  @Test
   void abruptTerminationBeforeAndAfterPublicationRecoversCommittedState(@TempDir Path temp) throws Exception {
     for (String phase : new String[]{"objects-written", "node-published", "manifest-published"}) {
       Path world = temp.resolve(phase);

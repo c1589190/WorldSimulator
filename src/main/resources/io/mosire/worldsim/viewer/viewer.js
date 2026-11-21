@@ -1,6 +1,7 @@
 import {
-  COUNTER_HIDE_ZOOM, counterSummary, drawUnitCounters, layoutUnitCounters, renderMilitary, showFormation, STACK_ZOOM
+  COUNTER_HIDE_ZOOM, counterSummary, drawGhostCounters, drawUnitCounters, layoutUnitCounters, renderMilitary, showFormation, STACK_ZOOM
 } from './military.js';
+import { renderCountry, renderDecisions, renderPopulation, renderProvinceLogistics, renderRoundRulings } from './panels.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('map');
@@ -14,9 +15,19 @@ const hubToggle = $('hubs');
 const borderToggle = $('geo-borders');
 const unitToggle = $('units');
 const marchToggle = $('marches');
+const featureLayers = {port: $('ports'), resource: $('resources'), contact: $('contacts')};
+const featureLabels = {port: '港口', resource: '资源', contact: '情报'};
+const featureColors = {port: '#7fceff', resource: '#ffca72'};
+let featureHits = [];
 const unitZoomNote = $('unit-zoom-note');
 const militaryPanel = $('military-panel');
+const perspectiveSeat = $('unit-perspective-seat');
 const formationDialog = $('formation-dialog');
+const subjectDialog = $('subject-decisions-dialog');
+const roundDialog = $('round-rulings-dialog');
+const decisionButton = $('open-subject-decisions');
+const rulingsButton = $('open-round-rulings');
+const recordRequests = new Map();
 const noUnitSelection = new Set();
 const terrainNames = {
   plains: '平原', forest: '森林', hills: '丘陵', mountain: '山地', desert: '沙漠',
@@ -24,6 +35,8 @@ const terrainNames = {
 };
 const kindNames = { land: '陆地', sea: '海域', lake: '湖泊' };
 const entityNames = { province: '省份', state: '州', region: '战略区域', country: '国家',
+  railway: '铁路', supplyHub: '补给中心',
+  feature: '地图标记', contact: '情报标记', document: '情报文档', command: '参谋机关',
   unit: '单位', orbatDocument: '编制文档', orbatNode: '编制节点', battle: '战斗' };
 const battleOutcomes = { 'attacker-victory': '攻方胜利', 'defender-victory': '守方胜利', draw: '平局', disengaged: '脱离接触' };
 const supplyNames = { connected: '补给连通', disconnected: '补给不通', unknown: '补给未知' };
@@ -42,6 +55,8 @@ let nodeListRequest;
 let timeline;
 let selectionRequest;
 let armyRequest;
+let provinceExtra;
+let mapSelection;
 let layer = 'terrain';
 let selection;
 let selectedBattleAddress;
@@ -120,6 +135,29 @@ function clockLabel(clock) {
   return clock.time.replace('T', ' ').replace(/:00$/, '');
 }
 
+function eventLabel(events) {
+  const labels = {
+    'march-arrived': '行军抵达',
+    'march-blocked': '行军受阻',
+    'battle-resolved': '战斗裁决',
+    SetTerritory: '领土变更',
+    SetTransitRight: '通行变更',
+    SetRiverCrossing: '跨河资料',
+    StartMarch: '出发行军',
+    CancelMarch: '取消行军',
+    clock: '回合截止',
+    'turn-opened': '回合开放',
+    'turn-resolved': '回合裁决',
+    SubmitDecision: '决策收件',
+  };
+  const counts = new Map();
+  for (const event of events || []) {
+    const label = labels[event.type] || '定时变更';
+    counts.set(label, (counts.get(label) || 0) + 1);
+  }
+  return [...counts].map(([label, count]) => count > 1 ? label + ' ×' + count : label).join(' · ');
+}
+
 function updateNodes() {
   const current = view?.info;
   const rows = timeline?.nodes || (current ? [current] : []);
@@ -133,13 +171,16 @@ function updateNodes() {
   $('timeline-prev').disabled = index <= 0;
   $('timeline-next').disabled = index < 0 || index >= rows.length - 1;
   const scroll = timelineTrack.scrollLeft;
-  timelineTrack.replaceChildren(...rows.map((row) => {
+  const visible = rows.slice(Math.max(0, index - 40), Math.max(0, index) + 41);
+  timelineTrack.replaceChildren(...visible.map((row) => {
     const item = document.createElement('li');
     const button = document.createElement('button');
     button.type = 'button';
     button.dataset.node = row.node;
-    button.title = row.clock?.source || row.node;
+    const summary = eventLabel(row.events);
+    button.title = summary ? row.node + ' · ' + summary : row.clock?.source || row.node;
     button.append(textElement('span', clockLabel(row.clock)), textElement('code', row.node));
+    if (summary) button.append(textElement('small', summary));
     if (row.node === current?.node) button.setAttribute('aria-current', 'step');
     button.addEventListener('click', () => loadMap(row.node));
     item.append(button);
@@ -166,12 +207,27 @@ function stepTimeline(delta) {
   if (index >= 0 && rows[index + delta]) loadMap(rows[index + delta].node);
 }
 
+function rebindPath(address) {
+  if (!address) return null;
+  const path = address.slice(address.indexOf('/') + 1);
+  return /^(country|orbat\/unit|map\/province)\/[^/]+$/.test(path) ? path : null;
+}
+
 async function loadMap(node, branchPage) {
+  closeRecordDialogs();
+  rulingsButton.disabled = true;
+  const carry = mapRequest ? mapSelection : {
+    province: rebindPath(selection?.address),
+    entity: rebindPath(armyState?.result?.address || armyState?.address),
+  };
+  mapSelection = carry;
   mapRequest?.abort();
   if (!branchPage) nodeListRequest?.abort();
   selectionRequest?.abort();
   armyRequest?.abort();
-  if (armyState) setArmyState(null);
+  provinceExtra?.request.abort();
+  if (carry.entity) setArmyState({ kind: carry.entity.startsWith('country/') ? 'country' : 'unit', message: '正在切换节点…' });
+  else if (armyState) setArmyState(null);
   const request = new AbortController();
   mapRequest = request;
   status('正在加载地图…');
@@ -216,6 +272,7 @@ async function loadMap(node, branchPage) {
     loadGeographicBorders();
     loadTerritoryGaps();
     loadUnits();
+    loadMapFeatures();
     loadMarches();
     loadBattles();
     return view;
@@ -226,7 +283,16 @@ async function loadMap(node, branchPage) {
     }
     return null;
   } finally {
-    if (mapRequest === request) mapRequest = null;
+    if (mapRequest === request) {
+      mapRequest = null;
+      rulingsButton.disabled = !view;
+      mapSelection = null;
+      if (view && !request.signal.aborted) {
+        const label = view.info.node;
+        if (carry.province) findProvince('/api/province', { address: label + '/' + carry.province });
+        if (carry.entity) openEntity(label + '/' + carry.entity, false);
+      }
+    }
   }
 }
 
@@ -354,7 +420,7 @@ function draw() {
   unitHits = [];
   const relativeZoom = view ? scale / fitScale() : 1;
   const belowCounterZoom = relativeZoom < COUNTER_HIDE_ZOOM;
-  const hasCounters = view && (view.info.units || view.info.battleMarkers.length);
+  const hasCounters = view && (view.info.units || view.info.battleMarkers.length || view.contactCounters?.length);
   unitZoomNote.toggleAttribute('hidden', !hasCounters || !unitToggle.checked || !belowCounterZoom);
   if (belowCounterZoom || !unitToggle.checked) updateCounterHover();
   context.setTransform(density, 0, 0, density, 0, 0);
@@ -385,9 +451,67 @@ function draw() {
   drawLogistics();
   drawGeographicBorders();
   drawSelection();
-  drawMarches();
+  drawSelectedMarch();
   context.restore();
   if (!belowCounterZoom) drawUnits(relativeZoom);
+  drawMapFeatures();
+}
+
+async function loadMapFeatures() {
+  const target = view;
+  try {
+    const data = await json('/api/map-features', version(target), target.requests.signal);
+    if (view !== target) return;
+    target.features = data;
+    target.contactCounters = data.filter(isContact);
+    target.counterLayout = null;
+    showProvinceFeatures();
+    scheduleDraw();
+  } catch {
+    if (view === target && !target.requests.signal.aborted) status('地图标记读取失败');
+  }
+}
+
+function showProvinceFeatures() {
+  const sight = view?.unitSight;
+  const items = (view?.features || []).filter(item => item.provinceAddress === selection?.address
+    && (!isContact(item) || !sight || sight.contacts.has(item.address)));
+  $('province-features').hidden = items.length === 0;
+  $('province-feature-list').replaceChildren(...items.map(item =>
+    listLink(featureLabels[item.kind] + ' · ' + item.name, item.address, false)));
+}
+
+function drawMapFeatures() {
+  featureHits = [];
+  const offsets = new Map();
+  for (const marker of view.features || []) {
+    if (isContact(marker) || !featureLayers[marker.kind].checked) continue;
+    const index = offsets.get(marker.provinceAddress) || 0;
+    offsets.set(marker.provinceAddress, index + 1);
+    const x = left + marker.point.x * scale + (index % 5) * 15;
+    const y = top + marker.point.y * scale - 13 - Math.floor(index / 5) * 15;
+    if (x < 0 || x > width || y < 0 || y > height) continue;
+    context.fillStyle = '#172528';
+    context.strokeStyle = featureColors[marker.kind];
+    context.lineWidth = 1.5;
+    context.beginPath();
+    if (marker.kind === 'resource') {
+      context.moveTo(x, y - 6);
+      context.lineTo(x + 6, y);
+      context.lineTo(x, y + 6);
+      context.lineTo(x - 6, y);
+      context.closePath();
+    } else {
+      context.rect(x - 5, y - 5, 10, 10);
+    }
+    context.fill();
+    context.stroke();
+    featureHits.push({ x, y, marker });
+  }
+}
+
+function isContact(marker) {
+  return marker.kind === 'contact';
 }
 
 function drawTiles(renderKey) {
@@ -536,62 +660,99 @@ function drawSelection() {
 }
 
 function marchLine(points) {
+  const vertices = points.filter((point, index) => index === 0
+    || point.x !== points[index - 1].x || point.y !== points[index - 1].y);
+  if (vertices.length < 2) return null;
+
   const path = new Path2D();
-  path.moveTo(points[0].x, points[0].y);
-  for (const point of points.slice(1)) path.lineTo(point.x, point.y);
-  return path;
+  path.moveTo(vertices[0].x, vertices[0].y);
+  for (let index = 1; index < vertices.length - 1; index++) {
+    const previous = vertices[index - 1];
+    const corner = vertices[index];
+    const next = vertices[index + 1];
+    const incoming = Math.hypot(previous.x - corner.x, previous.y - corner.y);
+    const outgoing = Math.hypot(next.x - corner.x, next.y - corner.y);
+    const radius = .28 * Math.min(incoming, outgoing);
+    path.lineTo(corner.x + (previous.x - corner.x) * radius / incoming,
+      corner.y + (previous.y - corner.y) * radius / incoming);
+    path.quadraticCurveTo(corner.x, corner.y, corner.x + (next.x - corner.x) * radius / outgoing,
+      corner.y + (next.y - corner.y) * radius / outgoing);
+  }
+  const end = vertices.at(-1);
+  const beforeEnd = vertices.at(-2);
+  const dx = end.x - beforeEnd.x;
+  const dy = end.y - beforeEnd.y;
+  path.lineTo(end.x, end.y);
+  return { path, end, angle: Math.atan2(dy, dx), length: Math.hypot(dx, dy) };
 }
 
 function marchDrawing(march) {
   const { points, reachedLegs, fraction } = march;
-  if (points.length < 2) return march;
   const from = points[reachedLegs];
   const to = points[reachedLegs + 1];
   const position = to ? { x: from.x + (to.x - from.x) * fraction, y: from.y + (to.y - from.y) * fraction } : from;
   return {
-    ...march,
     position,
-    outline: marchLine(points),
     reached: marchLine([...points.slice(0, reachedLegs + 1), position]),
     remaining: to ? marchLine([position, ...points.slice(reachedLegs + 1)]) : null,
   };
 }
 
-function drawMarches() {
-  if (!marchToggle.checked || !view.marches?.length) return;
+function strokeMarchLine(line, color, dashed = false) {
+  if (!line) return;
+  context.strokeStyle = '#213439';
+  context.lineWidth = 8 / scale;
+  context.stroke(line.path);
+  context.strokeStyle = color;
+  context.lineWidth = 4.5 / scale;
+  if (dashed) context.setLineDash([8 / scale, 7 / scale]);
+  context.stroke(line.path);
+  context.setLineDash([]);
+}
+
+function drawMarchHead(line, color, clearArrival) {
+  const length = between(line.length * scale * .65, 7, 19);
+  const inset = clearArrival ? Math.min(27 / scale, line.length * .38) : 0;
+  context.save();
+  context.translate(line.end.x - Math.cos(line.angle) * inset, line.end.y - Math.sin(line.angle) * inset);
+  context.rotate(line.angle);
+  context.scale(1 / scale, 1 / scale);
+  context.beginPath();
+  context.moveTo(0, 0);
+  context.quadraticCurveTo(-.55 * length, .32 * length, -length, .48 * length);
+  context.lineTo(-.76 * length, 0);
+  context.lineTo(-length, -.48 * length);
+  context.quadraticCurveTo(-.55 * length, -.32 * length, 0, 0);
+  context.closePath();
+  context.lineWidth = 2.2;
+  context.strokeStyle = '#213439';
+  context.fillStyle = color;
+  context.stroke();
+  context.fill();
+  context.restore();
+}
+
+function drawSelectedMarch() {
+  const selected = armyState?.selected;
+  if (!marchToggle.checked || selected?.size !== 1 || selectedBattleAddress) return;
+  const march = view.marches?.get(selected.values().next().value);
+  if (!march || march.points.length < 2) return;
+  const { reached, remaining, position } = march.drawing ??= marchDrawing(march);
+  const arrow = remaining || reached;
+  if (!arrow) return;
+  const reachedColor = '#86e8d8';
+  const remainingColor = { cancelled: '#b2b6b2', blocked: '#ff9b84' }[march.status] || '#ffd794';
   context.save();
   context.lineJoin = 'round';
   context.lineCap = 'round';
-  for (const march of view.marches) {
-    if (!march.outline) continue;
-    context.strokeStyle = '#213439';
-    context.lineWidth = 4.5 / scale;
-    context.stroke(march.outline);
-    const remainingColor = { cancelled: '#b2b6b2', blocked: '#ff9b84' }[march.status] || '#ffd794';
-    if (march.remaining) {
-      context.strokeStyle = remainingColor;
-      context.lineWidth = 2.1 / scale;
-      context.setLineDash([6 / scale, 4 / scale]);
-      context.stroke(march.remaining);
-      context.setLineDash([]);
-    }
-    context.strokeStyle = '#86e8d8';
-    context.lineWidth = 2.4 / scale;
-    context.stroke(march.reached);
-    const end = march.points.at(-1);
+  strokeMarchLine(reached, reachedColor);
+  strokeMarchLine(remaining, remainingColor, true);
+  drawMarchHead(arrow, remaining ? remainingColor : reachedColor, march.status === 'arrived' && unitToggle.checked);
+  if (march.status === 'moving') {
     context.beginPath();
-    context.arc(end.x, end.y, 3.6 / scale, 0, 2 * Math.PI);
-    context.strokeStyle = march.remaining ? remainingColor : '#86e8d8';
-    context.lineWidth = 1.6 / scale;
-    context.fillStyle = '#213439';
+    context.arc(position.x, position.y, 3.4 / scale, 0, 2 * Math.PI);
+    context.fillStyle = reachedColor;
     context.fill();
-    context.stroke();
-    if (march.status === 'moving') {
-      context.beginPath();
-      context.arc(march.position.x, march.position.y, 3.4 / scale, 0, 2 * Math.PI);
-      context.fillStyle = '#86e8d8';
-      context.fill();
-    }
   }
   context.restore();
 }
@@ -616,9 +777,10 @@ async function loadMarches() {
   try {
     const result = await json('/api/marches', version(target), target.requests.signal);
     if (view !== target) return;
-    target.marches = result.marches.map(marchDrawing);
-    $('march-panel').hidden = target.marches.length === 0;
-    $('march-list').replaceChildren(...target.marches.map((march) => {
+    const { marches } = result;
+    target.marches = new Map(marches.map(march => [march.unitAddress, march]));
+    $('march-panel').hidden = marches.length === 0;
+    $('march-list').replaceChildren(...marches.map((march) => {
       const label = { moving: '行军中', arrived: '已抵达', cancelled: '已取消', blocked: '通行受阻' }[march.status];
       const time = clockLabel({ time: march.blockage?.time || march.cancelledAt || march.arrivalTime });
       const detail = label + ' · ' + march.reachedLegs + '/' + march.legs.length + ' 段 · ' + time;
@@ -626,7 +788,8 @@ async function loadMarches() {
       const button = document.createElement('button');
       button.type = 'button';
       button.append(textElement('span', march.name), textElement('span', detail, 'march-meta'));
-      const conditions = march.legs[march.reachedLegs]?.conditions;
+      const leg = march.legs[Math.min(march.reachedLegs, march.legs.length - 1)];
+      const conditions = leg?.conditions;
       if (march.blockage) {
         button.append(textElement('span', '下一省管理方 ' + march.blockage.passage.authorityCountryId, 'march-meta'));
       } else if (march.status === 'moving' && conditions) {
@@ -634,6 +797,19 @@ async function loadMarches() {
         const supply = supplyNames[conditions.supply.status];
         button.append(textElement('span', terrain + ' · ' + supply + ' · '
           + number.format(conditions.effectiveSpeedKmPerHour) + ' 公里/小时', 'march-meta'));
+      }
+      if (leg?.edge) {
+        const river = {
+          'confirmed-crossing': '已确认跨河',
+          'confirmed-clear': '已确认无跨河',
+          candidate: '跨河待核',
+          'none-in-reference': '参考图未见河流',
+          unknown: '河流资料缺失',
+        }[leg.edge.river.status];
+        const rail = leg.edge.railways.length === 0 ? '无铁路记录'
+          : leg.edge.railways.every(track => track.status === 'closed') ? '铁路停用'
+          : leg.edge.railways.some(track => track.status === 'open') ? '有运行铁路' : '有铁路 · 运行未知';
+        button.append(textElement('span', river + ' · ' + rail, 'march-meta'));
       }
       button.addEventListener('click', () => focusMarch(march));
       item.append(button);
@@ -692,16 +868,29 @@ async function loadUnits() {
 }
 
 function drawUnits(relativeZoom) {
-  if (!unitToggle.checked || (!view.units?.length && !view.info.battleMarkers.length)) return;
+  if (!unitToggle.checked) return;
   const camera = [left, top, width, height, scale];
   if (!view.counterLayout || camera.some((value, index) => value !== view.counterLayout.camera[index])) {
-    view.counterLayout = { camera, hits: layoutUnitCounters([...(view.units || []), ...view.info.battleMarkers],
-      { left, top, width, height, scale, zoom: relativeZoom }) };
+    const bounds = { left, top, width, height, scale, zoom: relativeZoom };
+    const sight = view.unitSight;
+    const visible = [];
+    const ghosts = [];
+    for (const unit of view.units || []) {
+      if (!sight || sight.units.has(unit.address)) visible.push(unit);
+      else ghosts.push(unit);
+    }
+    const contacts = featureLayers.contact.checked ? view.contactCounters || [] : [];
+    const hits = layoutUnitCounters([...visible, ...view.info.battleMarkers,
+      ...contacts.filter(contact => !sight || sight.contacts.has(contact.address))], bounds);
+    const ghostHits = layoutUnitCounters(ghosts, { ...bounds, avoid: hits }).map(hit => ({ ...hit, ghost: true }));
+    view.counterLayout = { camera, hits, ghostHits };
   }
-  unitHits = view.counterLayout.hits;
+  const { hits, ghostHits } = view.counterLayout;
+  unitHits = [...ghostHits, ...hits];
   const armySelection = armyState?.selected || noUnitSelection;
   const selected = selectedBattleAddress ? new Set([...armySelection, selectedBattleAddress]) : armySelection;
-  drawUnitCounters(context, unitHits, selected);
+  if (ghostHits.length) drawGhostCounters(context, ghostHits, density);
+  drawUnitCounters(context, hits, selected);
 }
 
 function shapeSelection(shape, point) {
@@ -743,6 +932,12 @@ function showProvinceArea(kind, area, fallback) {
 }
 
 function selectProvince(result) {
+  provinceExtra?.request.abort();
+  provinceExtra = null;
+  $('province-logistics').open = false;
+  $('province-population').hidden = true;
+  $('province-population-content').replaceChildren();
+  $('province-logistics-content').replaceChildren();
   $('entity-detail').hidden = true;
   selectedBattleAddress = null;
   $('province').hidden = !result;
@@ -751,6 +946,7 @@ function selectProvince(result) {
   if (result) {
     const province = result.entity;
     selection = {
+      address: result.address,
       province: shapeSelection(province.shape, province.displayPoint),
       state: result.state && shapeSelection(result.state.shape),
       region: result.region && shapeSelection(result.region.shape),
@@ -771,16 +967,59 @@ function selectProvince(result) {
     showProvinceArea('region', result.region, result.regionName || province.regionId);
     $('province-owner-row').hidden = !view.info.countries;
     $('province-controller-row').hidden = !view.info.countries;
-    $('province-owner').textContent = result.ownerName || '未知';
-    $('province-controller').textContent = result.controllerName || '未知';
+    showCountryRelation('owner', result);
+    showCountryRelation('controller', result);
     const units = result.units || [];
     $('province-unit-section').hidden = units.length === 0;
     $('province-units').replaceChildren(...units.map((unit) => listLink(unit.name, unit.address, false)));
     $('province-address').value = result.address;
     showEvidence(result);
+    const details = { address: result.address, view, request: new AbortController() };
+    provinceExtra = details;
+    if (province.kind === 'land') {
+      $('province-population').hidden = false;
+      loadProvinceExtra(details, 'population');
+    }
   }
+  showProvinceFeatures();
   scheduleDraw();
 }
+
+function showCountryRelation(kind, result) {
+  const field = $('province-' + kind);
+  const address = result[kind + 'Address'];
+  const name = result[kind + 'Name'];
+  if (name && address) field.replaceChildren(linkButton(name, address, false));
+  else field.textContent = name || '未知';
+}
+
+async function loadProvinceExtra(details, kind) {
+  const area = $('province-' + kind + '-content');
+  area.replaceChildren(textElement('p', '正在读取…', 'entity-source'));
+  const { view: target, address, request } = details;
+  try {
+    const data = await json('/api/province/' + kind, { ...version(target), address }, request.signal);
+    if (view !== target || details !== provinceExtra || request.signal.aborted) return;
+    if (kind === 'population') renderPopulation(area, data.records, evidenceLine);
+    else {
+      renderProvinceLogistics(area, data, { link: linkButton, evidence: evidenceLine });
+      details.logisticsLoaded = true;
+    }
+  } catch (error) {
+    if (view === target && details === provinceExtra && !request.signal.aborted) {
+      area.replaceChildren(textElement('p', '读取失败 · ' + error.message, 'entity-source'));
+    }
+  } finally {
+    if (kind === 'logistics') details.logisticsLoading = false;
+  }
+}
+
+$('province-logistics').addEventListener('toggle', (event) => {
+  if (event.currentTarget.open && provinceExtra && !provinceExtra.logisticsLoaded && !provinceExtra.logisticsLoading) {
+    provinceExtra.logisticsLoading = true;
+    loadProvinceExtra(provinceExtra, 'logistics');
+  }
+});
 
 function showEvidence(result) {
   const entries = (result.fieldEvidence || []).map((entry) => {
@@ -854,17 +1093,79 @@ function evidenceLine(evidence) {
   return line;
 }
 
+function showUnitSight(sight) {
+  const panel = $('unit-perspective');
+  panel.hidden = !sight;
+  perspectiveSeat.hidden = (sight?.seats?.length || 0) < 2;
+  if (sight) {
+    $('unit-perspective-note').textContent = sight.message
+      || (sight.seat ? sight.seat.name + ' · 灰色为 GM 底影，? 为情报' : '当前回合无绑定 · 仅确认本单位');
+  }
+  if (view) view.counterLayout = null;
+  updateCounterHover();
+  showProvinceFeatures();
+  scheduleDraw();
+}
+
+function selectUnitSight(sight, seat) {
+  sight.seat = seat;
+  sight.units = new Set(seat?.units || [sight.address]);
+  sight.contacts = new Set(seat?.contacts || []);
+  if (!$('entity-detail').hidden && $('entity-kind').textContent === entityNames.contact
+      && !sight.contacts.has($('entity-address').textContent)) selectProvince(null);
+  showUnitSight(sight);
+}
+
+async function loadUnitSight(state) {
+  const target = view;
+  const address = state?.result?.kind === 'unit' ? state.result.address : null;
+  const unitAddress = address?.startsWith(target?.info.node + '/orbat/unit/') ? address : null;
+  if (!unitAddress) {
+    if (target) target.unitSight = null;
+    showUnitSight(null);
+    return;
+  }
+  if (target.unitSight?.address === unitAddress) return;
+  const sight = { address: unitAddress, message: '正在读取部队视野…' };
+  target.unitSight = sight;
+  selectUnitSight(sight, null);
+  try {
+    const seats = await json('/api/unit-perspective', { ...version(target), address: unitAddress }, target.requests.signal);
+    if (view !== target || target.unitSight !== sight) return;
+    sight.seats = seats;
+    sight.message = null;
+    perspectiveSeat.replaceChildren(...seats.map(seat => new Option(seat.name, seat.id)));
+    selectUnitSight(sight, seats[0]);
+  } catch {
+    if (view !== target || target.unitSight !== sight || target.requests.signal.aborted) return;
+    sight.message = '部队视野读取失败 · 仅确认本单位';
+    showUnitSight(sight);
+  }
+}
+
+perspectiveSeat.addEventListener('change', () => {
+  const sight = view?.unitSight;
+  if (!sight) return;
+  const seat = sight.seats.find(item => item.id === perspectiveSeat.value);
+  if (!seat) return;
+  selectUnitSight(sight, seat);
+});
+
 function setArmyState(state) {
   if (formationDialog.open) formationDialog.close();
   const changed = Boolean(armyState) !== Boolean(state);
   const content = $('military-content');
   armyState = state;
   militaryPanel.hidden = !state;
+  decisionButton.hidden = !['country', 'unit'].includes(state?.result?.kind);
   militaryPanel.parentElement.classList.toggle('military-open', Boolean(state));
   if (state) {
     const address = state.address || state.result?.address;
-    state.selected = new Set(address ? [address] : state.roster?.units.map(unit => unit.address));
-    renderMilitary(content, state, {
+    const country = state.kind === 'country';
+    $('military-heading').textContent = country ? '国家' : '军队';
+    state.selected = new Set(country ? [] : address ? [address] : state.roster?.units.map(unit => unit.address));
+    if (country && state.result) renderCountry(content, state.result, { link: linkButton, evidence: evidenceLine });
+    else renderMilitary(content, state, {
       evidence: evidenceLine,
       openFormation: () => showFormation(formationDialog, state, evidenceLine),
       locate: (point) => {
@@ -886,7 +1187,74 @@ function setArmyState(state) {
     content.replaceChildren();
   }
   if (changed) resize();
+  loadUnitSight(state);
   scheduleDraw();
+}
+
+function closeRecordDialogs() {
+  for (const dialog of [subjectDialog, roundDialog]) {
+    recordRequests.get(dialog)?.abort();
+    if (dialog.open) dialog.close();
+  }
+}
+
+async function openRecordDialog(dialog, heading, path, params, render) {
+  if (!view || mapRequest) return;
+  closeRecordDialogs();
+  const target = view;
+  const request = new AbortController();
+  recordRequests.set(dialog, request);
+  const title = dialog.querySelector('h2');
+  const context = dialog.querySelector('.record-bar p');
+  const body = dialog.querySelector('.record-body');
+  title.textContent = heading;
+  context.textContent = target.info.node;
+  body.replaceChildren(textElement('p', '正在读取…', 'record-meta'));
+  body.scrollTop = 0;
+  dialog.showModal();
+  try {
+    const data = await json(path, { ...version(target), ...params }, request.signal);
+    if (view !== target || !dialog.open || request.signal.aborted) return;
+    if (data.openingAddress) {
+      const [opening, , id] = data.openingAddress.split('/');
+      const resolved = data.resolvedAddress?.split('/')[0];
+      context.textContent = id + ' · 开放于 ' + opening + (resolved ? ' · 裁定于 ' + resolved : '') + ' · 当前 ' + data.node;
+    }
+    render(body, data, title);
+  } catch (error) {
+    if (view === target && dialog.open && !request.signal.aborted) {
+      body.replaceChildren(textElement('p', '读取失败 · ' + error.message, 'record-meta'));
+    }
+  } finally {
+    if (recordRequests.get(dialog) === request) recordRequests.delete(dialog);
+  }
+}
+
+function openSubjectDecisions(address, decisionMakerId, fromRound = false) {
+  if (!address) return;
+  openRecordDialog(subjectDialog, '决策原文', '/api/decisions', { address }, (body, data, title) => {
+    title.textContent = data.subjectName + ' · 决策原文';
+    renderDecisions(body, data, {
+      link: (label, ref) => {
+        const link = textElement('button', label, 'entity-link');
+        link.type = 'button';
+        link.addEventListener('click', () => {
+          closeRecordDialogs();
+          openEntity(ref, false);
+        });
+        return link;
+      },
+      showNode: loadMap,
+      showRound: openRoundRulings,
+      decisionMakerId,
+      fromRound,
+    });
+  });
+}
+
+function openRoundRulings() {
+  openRecordDialog(roundDialog, '本回合裁定', '/api/turn/rulings', {}, (body, data) =>
+    renderRoundRulings(body, data, (address, id) => openSubjectDecisions(address, id, true)));
 }
 
 function selectCounter(counter) {
@@ -897,12 +1265,29 @@ function selectCounter(counter) {
     openEntity(address, false, { roster });
     return;
   }
+  if (view.unitSight && counter.units.some(isContact)) {
+    showContactStack(counter.units);
+    return;
+  }
   armyRequest?.abort();
   const point = counter.units.reduce((center, unit) => ({
     x: center.x + unit.point.x / counter.units.length,
     y: center.y + unit.point.y / counter.units.length
   }), { x: 0, y: 0 });
   setArmyState({ roster: { units: counter.units, point } });
+}
+
+function showContactStack(units) {
+  selectProvince(null);
+  $('empty-province').hidden = true;
+  $('entity-detail').hidden = false;
+  $('entity-kind').textContent = entityNames.contact;
+  $('entity-name').textContent = counterSummary(units);
+  $('entity-key').hidden = true;
+  $('entity-address').textContent = '';
+  const list = textElement('ul', '', 'entity-links');
+  for (const unit of units) list.append(listLink((isContact(unit) ? '情报 · ' : '') + unit.name, unit.address, false));
+  $('entity-content').replaceChildren(list);
 }
 
 async function openEntity(address, center = true, { roster } = {}) {
@@ -920,11 +1305,14 @@ async function openEntity(address, center = true, { roster } = {}) {
   }
   const target = view;
   const request = new AbortController();
-  const military = parts[1] === 'orbat' && parts[2] !== 'battle';
-  if (military) {
+  const country = parts[1] === 'country';
+  const military = parts[1] === 'orbat' && !['battle', 'command'].includes(parts[2]);
+  const leftPanel = country || military;
+  if (leftPanel) {
+    if (country || parts[2] === 'unit') selectedBattleAddress = null;
     armyRequest?.abort();
     armyRequest = request;
-    setArmyState({ address, roster, message: '正在读取编制…' });
+    setArmyState({ address, roster, kind: country ? 'country' : 'unit', message: country ? '正在读取国家档案…' : '正在读取编制…' });
   } else {
     selectionRequest?.abort();
     selectionRequest = request;
@@ -933,6 +1321,11 @@ async function openEntity(address, center = true, { roster } = {}) {
   const lookup = (entityAddress) => json('/api/entity', { ...version(target), address: entityAddress }, request.signal);
   try {
     const result = await lookup(address);
+    if (result.kind === 'country') {
+      if (view !== target || request.signal.aborted) return;
+      setArmyState({ result, kind: 'country' });
+      return;
+    }
     if (result.kind === 'unit') {
       const [actual, ideal] = await Promise.all([result.actualAddress, result.idealAddress]
         .map(async (ref) => ref ? (await lookup(ref)).entity : null));
@@ -956,7 +1349,8 @@ async function openEntity(address, center = true, { roster } = {}) {
     showEntity(result, center);
   } catch (error) {
     if (request.signal.aborted) return;
-    if (military) setArmyState({ address, roster, message: '读取编制失败 · ' + error.message });
+    if (leftPanel) setArmyState({ address, roster, kind: country ? 'country' : 'unit',
+      message: '读取失败 · ' + error.message });
     else searchStatus(error.message, true);
   }
 }
@@ -965,12 +1359,41 @@ function showEntity(result, center) {
   const content = [];
   if (result.kind === 'battle') {
     content.push(...battleDetail(result));
-  } else if (result.kind === 'country') {
-    const control = result.controlledProvinces > 0
-      ? '已记录控制 ' + number.format(result.controlledProvinces) + ' 省' : '控制范围暂无记录';
-    content.push(textElement('p', '已记录归属 ' + number.format(result.ownedProvinces) + ' 省 · ' + control));
-    content.push(evidenceLine(result.entity.evidence));
-    if (result.capitalAddress) content.push(linkButton('定位首都', result.capitalAddress));
+  } else if (result.kind === 'railway') {
+    const railway = result.entity;
+    const service = { open: '开通', closed: '停运' }[railway.operation?.status] || '运营状态未知';
+    content.push(textElement('p', '等级 ' + railway.level + ' · ' + service));
+    if (railway.operation?.tonnesPerDay != null) {
+      content.push(textElement('p', number.format(railway.operation.tonnesPerDay) + ' 吨／日'));
+    }
+    if (railway.operation?.evidence) content.push(evidenceLine(railway.operation.evidence));
+  } else if (result.kind === 'supplyHub') {
+    const hub = result.entity;
+    content.push(textElement('p', '等级 ' + hub.level));
+    content.push(linkButton('查看所在省', view.info.node + '/map/province/' + hub.provinceId, false));
+  } else if (result.kind === 'feature' || result.kind === 'contact') {
+    const item = result.entity;
+    if (result.kind === 'contact') {
+      content.push(textElement('p', '发布者 · ' + item.owner + ' · ' + item.observedAt));
+      if (item.suspectedUnit) content.push(textElement('p', '疑似单位 · ' + item.suspectedUnit));
+      content.push(textElement('p', item.text, 'record-text'));
+    } else {
+      const operation = { open: '开通', closed: '关闭', active: '开采中', inactive: '停采' };
+      content.push(textElement('p', featureLabels[item.kind] + ' · ' + (operation[item.operation] || '状态未知')));
+      if (item.level != null) content.push(textElement('p', '等级 ' + item.level));
+      if (item.commodity) content.push(textElement('p', item.commodity + (item.quantity == null ? ' · 产量未知' : ' · ' + item.quantity + ' ' + item.unit)));
+      if (item.waterProvinceId) content.push(linkButton('临接海省', view.info.node + '/map/province/' + item.waterProvinceId, false));
+    }
+    content.push(evidenceLine(item.evidence), linkButton('查看所在省', view.info.node + '/map/province/' + item.provinceId, false));
+  } else if (result.kind === 'document') {
+    content.push(textElement('p', result.entity.text, 'record-text'), evidenceLine(result.entity.evidence));
+  } else if (result.kind === 'command') {
+    const item = result.entity;
+    content.push(textElement('p', item.kind === 'general-staff' ? '总参谋部' : '集团军参谋部'));
+    if (item.parentId) content.push(linkButton('查看上级', view.info.node + '/orbat/command/' + item.parentId, false));
+    for (const unit of item.unitIds) content.push(linkButton(unit, view.info.node + '/orbat/unit/' + unit, false));
+    content.push(textElement('button', '查看决策', 'entity-link'));
+    content.at(-1).addEventListener('click', () => openSubjectDecisions(result.address));
   } else if (result.entity.provinceIds) {
     const provinceIds = result.entity.provinceIds;
     content.push(textElement('p', '覆盖 ' + number.format(provinceIds.length) + ' 省'));
@@ -1153,9 +1576,13 @@ async function loadTerritoryGaps(offset = 0) {
     const result = await json('/api/territory/gaps', { ...version(target), offset, limit: 8 }, target.requests.signal);
     if (view !== target || target.gapRequest !== request || layer !== 'owner-gaps') return;
     const scope = result.scope === 'reference' ? result.referenceDate + ' 史料范围' : '全图';
-    summary.textContent = scope + ' · 待补 ' + number.format(result.total) + ' 省';
+    summary.textContent = result.coverage === 'none' ? '当前查询没有参考覆盖'
+      : scope + ' · 已检查 ' + number.format(result.checkedProvinces) + ' 省 · 待补 '
+        + number.format(result.unassigned) + ' · 归属冲突 ' + number.format(result.ownershipMismatches);
     list.append(...result.gaps.map(gap => listLink(
-      [gap.name, '省 ' + gap.provinceId, gap.stateName, gap.expectedCountryId].filter(Boolean).join(' · '), gap.address)));
+      [gap.name, '省 ' + gap.provinceId, gap.stateName,
+        gap.issue === 'owner-mismatch' ? gap.actualCountryId + ' → 预期 ' + gap.expectedCountryId : gap.expectedCountryId]
+        .filter(Boolean).join(' · '), gap.address)));
     const next = result.offset + result.gaps.length;
     more.dataset.offset = next;
     more.hidden = next >= result.total;
@@ -1181,8 +1608,10 @@ function counterAt(point) {
 
 function updateCounterHover(counter) {
   canvas.classList.toggle('over-counter', Boolean(counter));
-  const title = counter?.units.length > 1 ? counterSummary(counter.units)
-    : counter?.units[0]?.name || '';
+  const front = counter?.units[0];
+  const label = counter?.units.length > 1 ? counterSummary(counter.units)
+    : front ? (isContact(front) ? '情报 · ' : '') + front.name : '';
+  const title = counter?.ghost ? 'GM 底影 · ' + label : label;
   if (canvas.title !== title) canvas.title = title;
 }
 
@@ -1214,10 +1643,12 @@ canvas.addEventListener('pointerup', (event) => {
   if (!drag.moved) {
     const point = cursor(event);
     const counter = counterAt(point);
-    if (counter) selectCounter(counter);
+    const feature = featureHits.findLast(hit => Math.hypot(hit.x - point.x, hit.y - point.y) <= 8);
+    if (feature) openEntity(feature.marker.address, false);
+    else if (counter) selectCounter(counter);
     else {
       const location = { x: (point.x - left) / scale, y: (point.y - top) / scale };
-      closeMilitary();
+      if (armyState?.kind !== 'country') closeMilitary();
       findProvince('/api/pick', location);
     }
   }
@@ -1343,8 +1774,26 @@ $('reload').addEventListener('click', () => {
 branchPicker.addEventListener('change', () => loadNodes(branchPicker.value, true));
 $('timeline-prev').addEventListener('click', () => stepTimeline(-1));
 $('timeline-next').addEventListener('click', () => stepTimeline(1));
+decisionButton.addEventListener('click', () => openSubjectDecisions(armyState?.result?.address));
+rulingsButton.addEventListener('click', openRoundRulings);
+for (const dialog of [subjectDialog, roundDialog]) {
+  dialog.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !event.isComposing) {
+      event.preventDefault();
+      dialog.close();
+    }
+  });
+  dialog.addEventListener('close', () => {
+    if (!dialog.open) recordRequests.get(dialog)?.abort();
+  });
+}
 nodes.addEventListener('change', () => loadMap(nodes.value));
 marchToggle.addEventListener('change', scheduleDraw);
+for (const toggle of Object.values(featureLayers)) toggle.addEventListener('change', scheduleDraw);
+featureLayers.contact.addEventListener('change', () => {
+  if (view) view.counterLayout = null;
+  updateCounterHover();
+});
 
 new ResizeObserver(resize).observe($('viewport'));
 resize();

@@ -63,15 +63,16 @@ class WorldMcpProcessTest {
 
   private static String java() { return Path.of(System.getProperty("java.home"), "bin", "java").toString(); }
 
-  private static final class Client implements AutoCloseable {
+  static final class Client implements AutoCloseable {
     private final Process process;
     private final OutputStreamWriter writer;
     private final BufferedReader reader;
     private int id;
 
-    Client(Path cwd) throws Exception {
-      process = new ProcessBuilder(java(), "-cp", System.getProperty("java.class.path"), WorldSimCli.class.getName())
-          .directory(cwd.toFile()).start();
+    Client(Path cwd, String... args) throws Exception {
+      var command = new java.util.ArrayList<>(List.of(java(), "-cp", System.getProperty("java.class.path"), WorldSimCli.class.getName()));
+      command.addAll(List.of(args));
+      process = new ProcessBuilder(command).directory(cwd.toFile()).start();
       writer = new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8);
       reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
     }

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WorldSimulator 决策视角</title>
+  <link rel="stylesheet" href="/viewer.css">
+  <script type="module" src="/decision-view.js"></script>
+</head>
+<body>
+  <header class="topbar"><h1 id="perspective-heading">决策视角</h1><p id="perspective-node" role="status"></p></header>
+  <main class="perspective-layout">
+    <section aria-label="可见地图"><canvas id="perspective-map" aria-label="可见地图" width="1050" height="650"></canvas></section>
+    <aside class="pane">
+      <form id="perspective-search" role="search">
+        <input id="perspective-query" type="search" aria-label="查找可见实体" placeholder="查找可见实体" required>
+        <button type="submit">查找</button>
+      </form>
+      <div id="perspective-results" class="perspective-list"></div>
+      <article id="perspective-detail" aria-live="polite"></article>
+      <h2>可见标记</h2>
+      <div id="perspective-markers" class="perspective-list"></div>
+      <h2>情报文档</h2>
+      <div id="perspective-documents" class="perspective-list"></div>
+    </aside>
+  </main>
+</body>
+</html>

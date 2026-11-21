@@ -57,6 +57,7 @@ final class LandMarchRules {
   private Map<String, March.Supply> coverage(WorldMap map) {
     var tracks = new HashSet<List<String>>();
     for (var railway : map.railways().values()) {
+      if (railway.closed()) continue;
       var path = railway.provincePath();
       for (int i = 1; i < path.size(); i++) {
         String a = path.get(i - 1);

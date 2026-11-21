@@ -44,18 +44,25 @@ public final class WorldViewerServer implements AutoCloseable {
 
   private final WorldApplicationService app;
   private final HttpServer server;
+  public record DecisionAccess(String node, java.util.function.Supplier<Object> brief,
+                               java.util.function.Supplier<List<?>> markers, java.util.function.Function<String, Object> lookup,
+                               java.util.function.Function<String, Map<String, Object>> search) {}
+  private final DecisionAccess decision;
   private final ExecutorService workers = Executors.newFixedThreadPool(4);
   private final List<Frame> frames = new ArrayList<>(2);
 
-  private WorldViewerServer(WorldApplicationService app, int port) throws IOException {
+  private WorldViewerServer(WorldApplicationService app, int port, DecisionAccess decision) throws IOException {
     this.app = app;
+    this.decision = decision;
     server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 32);
   }
 
-  public static WorldViewerServer start(WorldApplicationService app, int port) {
+  public static WorldViewerServer start(WorldApplicationService app, int port) { return start(app, port, null); }
+
+  public static WorldViewerServer start(WorldApplicationService app, int port, DecisionAccess decision) {
     System.setProperty("java.awt.headless", "true");
     try {
-      WorldViewerServer viewer = new WorldViewerServer(app, port);
+      WorldViewerServer viewer = new WorldViewerServer(app, port, decision);
       viewer.server.setExecutor(viewer.workers);
       viewer.server.createContext("/", viewer::handle);
       viewer.server.start();
@@ -66,7 +73,7 @@ public final class WorldViewerServer implements AutoCloseable {
     }
   }
 
-  int port() {
+  public int port() {
     return server.getAddress().getPort();
   }
 
@@ -91,13 +98,15 @@ public final class WorldViewerServer implements AutoCloseable {
         return;
       }
       try {
-        route(exchange);
+        if (decision == null) route(exchange);
+        else routeDecision(exchange);
       } catch (AddressException e) {
         error(exchange, e.code().endsWith("ENTITY_NOT_FOUND") ? 404 : 400, e.code(), e.getMessage());
       } catch (TimelineException e) {
         int status = switch (e.code()) {
-          case "TIMELINE_NODE_NOT_FOUND" -> 404;
+          case "TIMELINE_NODE_NOT_FOUND", "ENTITY_NOT_FOUND" -> 404;
           case "VIEWER_HASH_MISMATCH" -> 409;
+          case "DECISION_ACCESS_DENIED" -> 403;
           case "TIMELINE_NODE_INVALID", "ARGUMENT_INVALID" -> 400;
           default -> 500;
         };
@@ -114,6 +123,31 @@ public final class WorldViewerServer implements AutoCloseable {
         || (port() == 80 && ("localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host)));
   }
 
+  private void routeDecision(HttpExchange exchange) throws IOException {
+    String path = exchange.getRequestURI().getRawPath();
+    Map<String, String> args = query(exchange.getRequestURI().getRawQuery());
+    switch (path) {
+      case "/" -> resource(exchange, "decision-view.html", "text/html; charset=utf-8");
+      case "/decision-view.js" -> resource(exchange, "decision-view.js", "text/javascript; charset=utf-8");
+      case "/military.js" -> resource(exchange, "military.js", "text/javascript; charset=utf-8");
+      case "/viewer.css" -> resource(exchange, "viewer.css", "text/css; charset=utf-8");
+      case "/api/brief" -> json(exchange, 200, decision.brief().get());
+      case "/api/markers" -> json(exchange, 200, decision.markers().get());
+      case "/api/entity" -> json(exchange, 200, decision.lookup().apply(required(args, "address")));
+      case "/api/search" -> json(exchange, 200, decision.search().apply(required(args, "query")));
+      case "/api/terrain" -> {
+        var saved = app.savedMap(decision.node());
+        var image = frame(saved).image(ViewerMap.Layer.TERRAIN, 0, 0, 0, saved.state().countries(), Set.of());
+        send(exchange, 200, "image/png", image);
+      }
+      case "/api/dimensions" -> {
+        var map = app.savedMap(decision.node()).map();
+        json(exchange, 200, Map.of("width", map.width(), "height", map.height()));
+      }
+      default -> error(exchange, 404, "VIEWER_NOT_FOUND", "决策查看器路径不存在");
+    }
+  }
+
   private void route(HttpExchange exchange) throws IOException {
     String path = exchange.getRequestURI().getRawPath();
     Map<String, String> query = query(exchange.getRequestURI().getRawQuery());
@@ -123,6 +157,7 @@ public final class WorldViewerServer implements AutoCloseable {
       case "/viewer.css" -> resource(exchange, "viewer.css", "text/css; charset=utf-8");
       case "/viewer.js" -> resource(exchange, "viewer.js", "text/javascript; charset=utf-8");
       case "/military.js" -> resource(exchange, "military.js", "text/javascript; charset=utf-8");
+      case "/panels.js" -> resource(exchange, "panels.js", "text/javascript; charset=utf-8");
       case "/api/nodes" -> json(exchange, 200, app.tree(
           integer(query.getOrDefault("offset", "0"), "offset"),
           integer(query.getOrDefault("limit", "100"), "limit")));
@@ -130,6 +165,10 @@ public final class WorldViewerServer implements AutoCloseable {
       case "/api/map" -> json(exchange, 200, info(app.savedMap(query.get("node"))));
       case "/api/overview", "/api/tile" -> render(exchange, query, path.equals("/api/tile"));
       case "/api/province" -> json(exchange, 200, province(snapshot(query), NodeAddress.parse(required(query, "address"))));
+      case "/api/decisions" -> json(exchange, 200, app.decisionPanel(snapshot(query), NodeAddress.parse(required(query, "address"))));
+      case "/api/turn/rulings" -> json(exchange, 200, app.roundRulings(snapshot(query)));
+      case "/api/province/population" -> json(exchange, 200, app.provincePopulation(snapshot(query), NodeAddress.parse(required(query, "address"))));
+      case "/api/province/logistics" -> json(exchange, 200, app.provinceLogistics(snapshot(query), NodeAddress.parse(required(query, "address"))));
       case "/api/entity" -> json(exchange, 200, entity(snapshot(query), NodeAddress.parse(required(query, "address"))));
       case "/api/search" -> {
         SavedMap saved = snapshot(query);
@@ -147,6 +186,9 @@ public final class WorldViewerServer implements AutoCloseable {
       case "/api/territory/gaps" -> json(exchange, 200, app.territoryGaps(snapshot(query).node().label(),
           query.get("scope"), query.get("countryId"), query.get("stateId"),
           integer(query.getOrDefault("offset", "0"), "offset"), integer(query.getOrDefault("limit", "25"), "limit")));
+      case "/api/map-features" -> json(exchange, 200, app.mapFeatures(snapshot(query)));
+      case "/api/unit-perspective" -> json(exchange, 200,
+          app.unitPerspective(snapshot(query), NodeAddress.parse(required(query, "address"))));
       case "/api/units" -> json(exchange, 200, app.unitMarkers(snapshot(query).node().label()));
       case "/api/marches" -> json(exchange, 200, app.marches(snapshot(query)));
       case "/api/battles" -> json(exchange, 200, app.battles(snapshot(query),
@@ -255,9 +297,11 @@ public final class WorldViewerServer implements AutoCloseable {
     if (territory != null) {
       if (territory.owner() != null) {
         result.put("ownerName", countries.countries().get(territory.owner().countryId()).name());
+        result.put("ownerAddress", new NodeAddress(saved.node(), List.of("country", territory.owner().countryId())).canonical());
       }
       if (territory.controller() != null) {
         result.put("controllerName", countries.countries().get(territory.controller().countryId()).name());
+        result.put("controllerAddress", new NodeAddress(saved.node(), List.of("country", territory.controller().countryId())).canonical());
       }
     }
     return result;

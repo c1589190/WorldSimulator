@@ -1,6 +1,9 @@
 package io.mosire.worldsim.state;
 
 import io.mosire.worldsim.country.CountryState;
+import io.mosire.worldsim.country.CivicState;
+import io.mosire.worldsim.info.InfoState;
+import io.mosire.worldsim.info.TurnState;
 import io.mosire.worldsim.json.JsonCodec;
 import io.mosire.worldsim.map.WorldMap;
 import io.mosire.worldsim.orbat.OrbatState;
@@ -14,7 +17,8 @@ import java.util.Objects;
 import java.util.function.Function;
 
 /** Saved world state. Empty optional domains preserve the original map-only canonical bytes. */
-public record StaticWorldState(String id, WorldMap map, CountryState country, OrbatState orbat, String simulationTime) {
+public record StaticWorldState(String id, WorldMap map, CountryState country, OrbatState orbat, String simulationTime,
+                               CivicState civic, InfoState info, TurnState decisions) {
   public StaticWorldState {
     if (id == null || id.isBlank()) {
       throw new IllegalArgumentException("StaticWorldState.id 不得为空白");
@@ -22,7 +26,14 @@ public record StaticWorldState(String id, WorldMap map, CountryState country, Or
     Objects.requireNonNull(map, "map");
     if (CountryState.EMPTY.equals(country)) country = null;
     if (OrbatState.EMPTY.equals(orbat)) orbat = null;
+    if (CivicState.EMPTY.equals(civic)) civic = null;
+    if (InfoState.EMPTY.equals(info)) info = null;
+    if (TurnState.EMPTY.equals(decisions)) decisions = null;
     if (simulationTime != null) simulationTime = SimulationTime.normalize(simulationTime);
+  }
+
+  public StaticWorldState(String id, WorldMap map, CountryState country, OrbatState orbat, String time) {
+    this(id, map, country, orbat, time, null, null, null);
   }
 
   public StaticWorldState(String id, WorldMap map, CountryState country, OrbatState orbat) {
@@ -34,7 +45,7 @@ public record StaticWorldState(String id, WorldMap map, CountryState country, Or
   }
 
   public StaticWorldState withMap(WorldMap next) {
-    return new StaticWorldState(id, next, country, orbat, simulationTime);
+    return new StaticWorldState(id, next, country, orbat, simulationTime, civic, info, decisions);
   }
 
   public CountryState countries() {
@@ -44,6 +55,12 @@ public record StaticWorldState(String id, WorldMap map, CountryState country, Or
   public OrbatState formations() {
     return orbat == null ? OrbatState.EMPTY : orbat;
   }
+
+  public CivicState civics() { return civic == null ? CivicState.EMPTY : civic; }
+
+  public InfoState intelligence() { return info == null ? InfoState.EMPTY : info; }
+
+  public TurnState turns() { return decisions == null ? TurnState.EMPTY : decisions; }
 
   public String canonicalJson() {
     return JsonCodec.canonicalJson(this);
@@ -71,7 +88,8 @@ public record StaticWorldState(String id, WorldMap map, CountryState country, Or
     prefix.update(mapJson.substring(0, mapJson.length() - 1).getBytes(StandardCharsets.UTF_8));
     return state -> {
       if (!id.equals(state.id()) || map != state.map()) return state.contentHash();
-      String fields = JsonCodec.canonicalJson(new StateFields(state.country(), state.orbat(), state.simulationTime()));
+      String fields = JsonCodec.canonicalJson(new StateFields(state.country(), state.orbat(), state.simulationTime(),
+          state.civic(), state.info(), state.decisions()));
       try {
         var digest = (MessageDigest) prefix.clone();
         if (fields.length() > 2) digest.update((byte) ',');
@@ -83,5 +101,6 @@ public record StaticWorldState(String id, WorldMap map, CountryState country, Or
   }
 
   // These fields follow id and map in the canonical state JSON.
-  private record StateFields(CountryState country, OrbatState orbat, String simulationTime) {}
+  private record StateFields(CountryState country, OrbatState orbat, String simulationTime,
+                             CivicState civic, InfoState info, TurnState decisions) {}
 }

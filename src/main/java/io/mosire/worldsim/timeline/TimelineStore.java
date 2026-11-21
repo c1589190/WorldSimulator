@@ -54,6 +54,13 @@ public interface TimelineStore extends AutoCloseable {
     return Optional.empty();
   }
 
+  record NodeWrite(TimelineNode node, String checkpointStateJson) {}
+
+  /** Publish a consecutive series of nodes and one receipt as a single commit. */
+  default void saveNodes(List<NodeWrite> nodes, CommitReceipt receipt) {
+    throw new TimelineException("TIMELINE_SERIES_UNSUPPORTED", "此存储不支持原子提交多节点");
+  }
+
   /** 为已保存节点生成/覆盖派生 checkpoint。 */
   void saveCheckpoint(NodeRef ref, String checkpointStateJson);
 

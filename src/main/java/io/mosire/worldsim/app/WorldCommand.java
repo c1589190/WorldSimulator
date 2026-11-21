@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.mosire.worldsim.address.NodeAddress;
 import io.mosire.worldsim.address.NodeRef;
 import io.mosire.worldsim.json.JsonCodec;
+import io.mosire.worldsim.info.TurnState;
 import io.mosire.worldsim.map.Adjacency;
 import io.mosire.worldsim.map.PolygonTopology;
 import io.mosire.worldsim.orbat.MilOrgFormat;
@@ -16,6 +17,7 @@ import io.mosire.worldsim.timeline.TimelineException;
 import java.time.DateTimeException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,11 +28,14 @@ import java.util.function.Supplier;
 /** Validated intent that plans a domain change against an explicit working state. */
 public sealed interface WorldCommand permits WorldCommand.PatchProvince, WorldCommand.PersistedChange,
     WorldCommand.RebuildAdjacencies, WorldCommand.InitializeClock, WorldCommand.AdvanceTime,
-    WorldCommand.StartMarch, WorldCommand.CancelMarch, WorldCommand.ResolveBattle, WorldCommand.SetTransitRight {
+    WorldCommand.StartMarch, WorldCommand.CancelMarch, WorldCommand.ResolveBattle, WorldCommand.SetTransitRight,
+    WorldCommand.SetRiverCrossing, WorldEconomy.Command, WorldCommand.ResolveTurn {
   WorldChange plan(StaticWorldState state, Context context);
 
   record Context(NodeRef node, String stateHash, Supplier<String> baseTime,
-                 Function<WorldApplicationService.SavedMap, WorldGeography> geography) {
+                 Function<WorldApplicationService.SavedMap, WorldGeography> geography,
+                 Function<WorldApplicationService.SavedMap, LandLinks> landLinks,
+                 Function<NodeAddress, Map<String, TurnState.Proposal>> proposals) {
     String currentTime(StaticWorldState state) {
       return state.simulationTime() == null ? baseTime.get() : state.simulationTime();
     }
@@ -73,13 +78,38 @@ public sealed interface WorldCommand permits WorldCommand.PatchProvince, WorldCo
         return new InitializeClock(SimulationTime.normalize(text(command, "time")));
       }
       if (kind.equals("advanceTime")) {
+        if (command.containsKey("to")) {
+          requireFields(command, "op", "to");
+          return new AdvanceTime(0, SimulationTime.normalize(text(command, "to")));
+        }
         requireFields(command, "op", "minutes");
         Object value = command.get("minutes");
         if (!(value instanceof Integer || value instanceof Long) || ((Number) value).longValue() < 1) {
           throw new IllegalArgumentException("minutes 须为正整数");
         }
-        return new AdvanceTime(((Number) value).longValue());
+        return new AdvanceTime(((Number) value).longValue(), null);
       }
+      if (kind.equals("submitDecision")) throw new IllegalArgumentException("决策须通过绑定身份的决策工具提交");
+      if (kind.equals("resolveTurn")) {
+        List<TurnState.Ruling> rulings = null;
+        if (command.containsKey("rulings")) {
+          requireFields(command, "op", "turnAddress", "resolution", "rulings");
+          if (!(command.get("rulings") instanceof List<?> entries)) throw new IllegalArgumentException("rulings 须为裁定数组");
+          rulings = entries.stream().map(item -> JsonCodec.mapper().convertValue(item, TurnState.Ruling.class)).toList();
+        } else {
+          requireFields(command, "op", "turnAddress", "resolution");
+        }
+        return new ResolveTurn(NodeAddress.parse(text(command, "turnAddress")), text(command, "resolution"), rulings);
+      }
+      if (kind.equals("putCensus") && command.get("records") instanceof List<?> list) {
+        for (Object item : list) {
+          if (!(item instanceof Map<?, ?> record) || !(record.get("people") instanceof Integer || record.get("people") instanceof Long)) {
+            throw new IllegalArgumentException("人口人数须为整数");
+          }
+        }
+      }
+      if (kind.equals("advanceEvent")) throw new IllegalArgumentException("advanceEvent 由时间推进生成");
+      if (WorldEconomy.OPERATIONS.contains(kind)) return WorldEconomy.parse(kind, command);
       if (kind.equals("startMarch")) {
         requireFields(command, "op", "address", "route");
         if (!(command.get("route") instanceof List<?> list)) throw new IllegalArgumentException("需要行军路线数组");
@@ -102,6 +132,14 @@ public sealed interface WorldCommand permits WorldCommand.PatchProvince, WorldCo
         requireFields(command, "op", "grantorAddress", "guestAddress", "evidence");
         return new SetTransitRight(text(command, "grantorAddress"), text(command, "guestAddress"),
             JsonCodec.mapper().convertValue(command.get("evidence"), Evidence.class));
+      }
+      if (kind.equals("setRiverCrossing")) {
+        requireFields(command, "op", "fromAddress", "toAddress", "crossesRiver", "evidence");
+        Object value = command.get("crossesRiver");
+        if (value != null && !(value instanceof Boolean)) throw new IllegalArgumentException("crossesRiver 须为布尔值或 null");
+        var evidence = JsonCodec.mapper().convertValue(command.get("evidence"), Evidence.class);
+        if ((value == null) != (evidence == null)) throw new IllegalArgumentException("确认跨河需要证据，清除时两字段均为 null");
+        return new SetRiverCrossing(text(command, "fromAddress"), text(command, "toAddress"), (Boolean) value, evidence);
       }
       if (kind.equals("importMilOrg")) {
         if (!command.keySet().equals(Set.of("op", "documentId", "role", "source", "milOrg"))) {
@@ -144,6 +182,19 @@ public sealed interface WorldCommand permits WorldCommand.PatchProvince, WorldCo
   record PersistedChange(WorldChange change) implements WorldCommand {
     @Override public WorldChange plan(StaticWorldState state, Context context) {
       return switch (change) {
+        case WorldChange.OpenTurn op -> {
+          context.requireTime(state);
+          for (String id : op.brief().ids()) {
+            var participant = op.brief().participant(id);
+            var paths = new java.util.LinkedHashSet<>(participant.readablePaths());
+            paths.addAll(participant.proposalTargets());
+            if (!op.brief().legacy()) paths.add(participant.subject().path());
+            for (String path : paths) {
+              WorldTurn.entity(state, NodeAddress.parse(context.node().label() + "/" + path), context.stateHash(), context.currentTime(state));
+            }
+          }
+          yield change;
+        }
         case WorldChange.PutUnit op -> new WorldChange.PutUnit(state.formations().bindIdeal(op.unit()));
         case WorldChange.SetTerritory op -> {
           for (String id : op.provinceIds()) {
@@ -161,8 +212,31 @@ public sealed interface WorldCommand permits WorldCommand.PatchProvince, WorldCo
   record RebuildAdjacencies() implements WorldCommand {
     @Override public WorldChange plan(StaticWorldState state, Context context) {
       List<Adjacency> edges = new ArrayList<>(PolygonTopology.deriveAdjacencies(state.map()));
+      var crossings = new HashMap<List<String>, Adjacency.RiverCrossing>();
+      for (var edge : state.map().adjacencies()) {
+        var crossing = edge.riverCrossing();
+        if (crossing == null) continue;
+        var from = state.map().provinces().get(edge.a());
+        var to = state.map().provinces().get(edge.b());
+        if (from != null && to != null && crossing.shapeHash().equals(LandLinks.shapeHash(from, to))) {
+          crossings.put(List.of(edge.a(), edge.b()), crossing);
+        }
+      }
+      if (!crossings.isEmpty()) {
+        edges.replaceAll(edge -> edge.permitsLandMarch() ? edge.withRiverCrossing(crossings.get(List.of(edge.a(), edge.b()))) : edge);
+      }
       state.map().adjacencies().stream().filter(a -> a.kind().startsWith("special")).forEach(edges::add);
       return new WorldChange.ReplaceAdjacencies(edges);
+    }
+  }
+
+  record SetRiverCrossing(String fromAddress, String toAddress, Boolean crosses, Evidence evidence) implements WorldCommand {
+    @Override public WorldChange plan(StaticWorldState state, Context context) {
+      var saved = new WorldApplicationService.SavedMap(context.node(), context.stateHash(), state);
+      var from = WorldMovement.landProvince(saved, fromAddress);
+      var to = WorldMovement.landProvince(saved, toAddress);
+      var crossing = crosses == null ? null : new Adjacency.RiverCrossing(crosses, LandLinks.shapeHash(from, to), evidence);
+      return new WorldChange.SetRiverCrossing(from.id(), to.id(), crossing);
     }
   }
 
@@ -177,11 +251,19 @@ public sealed interface WorldCommand permits WorldCommand.PatchProvince, WorldCo
     }
   }
 
-  record AdvanceTime(long minutes) implements WorldCommand {
+  record AdvanceTime(long minutes, String to) implements WorldCommand {
     @Override public WorldChange plan(StaticWorldState state, Context context) {
-      LocalDateTime current = LocalDateTime.parse(context.requireTime(state));
+      return new WorldChange.SetSimulationTime(target(context.requireTime(state)));
+    }
+
+    String target(String current) {
+      if (current == null) throw new TimelineException("SIMULATION_TIME_REQUIRED", "请先设定剧本时间");
+      if (to != null) {
+        if (to.compareTo(current) <= 0) throw new TimelineException("SIMULATION_TIME_NOT_ADVANCING", "目标时间须晚于当前时刻");
+        return to;
+      }
       try {
-        return new WorldChange.SetSimulationTime(SimulationTime.format(current.plusMinutes(minutes)));
+        return SimulationTime.format(LocalDateTime.parse(current).plusMinutes(minutes));
       } catch (DateTimeException | ArithmeticException | IllegalArgumentException e) {
         throw new TimelineException("SIMULATION_TIME_RANGE", "推进后的剧本时间超出范围", e);
       }
@@ -193,7 +275,7 @@ public sealed interface WorldCommand permits WorldCommand.PatchProvince, WorldCo
       context.requireBase(address);
       String time = context.requireTime(state);
       var saved = new WorldApplicationService.SavedMap(context.node(), context.stateHash(), state);
-      var march = WorldMovement.issue(saved, address, route, context.geography().apply(saved), time);
+      var march = WorldMovement.issue(saved, address, route, context.geography().apply(saved), context.landLinks().apply(saved), time);
       return new WorldChange.StartMarch(address.path().getLast(), march);
     }
   }
@@ -209,6 +291,15 @@ public sealed interface WorldCommand permits WorldCommand.PatchProvince, WorldCo
   record ResolveBattle(WorldBattle.Request battle) implements WorldCommand {
     @Override public WorldChange plan(StaticWorldState state, Context context) {
       return new WorldChange.ResolveBattle(WorldBattle.resolve(state, context, battle));
+    }
+  }
+
+  record ResolveTurn(NodeAddress address, String resolution, List<TurnState.Ruling> rulings) implements WorldCommand {
+    @Override public WorldChange plan(StaticWorldState state, Context context) {
+      context.requireBase(address);
+      String id = WorldTurn.turnId(address);
+      state.turns().requireOpen(id);
+      return new WorldChange.ResolveTurn(id, context.proposals().apply(address), resolution, rulings);
     }
   }
 

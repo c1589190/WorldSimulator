@@ -318,6 +318,9 @@ public final class SqliteTimelineStore implements TimelineStore {
   public synchronized void saveNode(TimelineNode node, String checkpointStateJson) {
     ensureOpen();
     Objects.requireNonNull(node, "node");
+    if (node.eventTime() != null) {
+      throw new TimelineException("TIMELINE_SERIES_UNSUPPORTED", "事件节点使用 JSON 世界存档");
+    }
     if (checkpointStateJson != null && checkpointStateJson.isBlank()) {
       throw new TimelineException("TIMELINE_CHECKPOINT_INVALID", "checkpoint JSON 不得为空白");
     }

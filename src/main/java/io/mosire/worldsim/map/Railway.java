@@ -1,10 +1,36 @@
 package io.mosire.worldsim.map;
 
+import io.mosire.worldsim.state.Evidence;
+
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
-/** 静态铁路：等级 + 连续 provincePath；连通性由 WorldMapValidator 对照邻接校验。 */
-public record Railway(String id, int level, List<String> provincePath) {
+/** Rail alignment and optional operating evidence at a world node. */
+public record Railway(String id, int level, List<String> provincePath, Operation operation) {
+  public record Operation(String status, Double tonnesPerDay, Evidence evidence) {
+    public Operation {
+      if (status == null || !Set.of("open", "closed", "unknown").contains(status)) {
+        throw new IllegalArgumentException("未知铁路运营状态: " + status);
+      }
+      if (tonnesPerDay != null && (!Double.isFinite(tonnesPerDay) || tonnesPerDay < 0
+          || status.equals("closed") && tonnesPerDay != 0)) {
+        throw new IllegalArgumentException("无效的铁路日运能");
+      }
+      Objects.requireNonNull(evidence, "铁路运营来源");
+      if ((!status.equals("unknown") || tonnesPerDay != null)
+          && (evidence.source() == null || evidence.status().equals("unknown") || evidence.status().equals("legacy-ambiguous"))) {
+        throw new IllegalArgumentException("铁路运营数据需要有来源的证据");
+      }
+    }
+  }
+
+  public Railway(String id, int level, List<String> provincePath) {
+    this(id, level, provincePath, null);
+  }
+
+  public boolean closed() { return operation != null && operation.status().equals("closed"); }
+
   public Railway {
     if (id == null || id.isBlank()) {
       throw new IllegalArgumentException("Railway.id 不得为空白");
